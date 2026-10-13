@@ -7,8 +7,8 @@
  * Security in the database. NEVER paste the service_role / secret key here.
  */
 window.CHAI_CONFIG = {
-  SUPABASE_URL: 'https://YOUR-PROJECT-REF.supabase.co',
-  SUPABASE_PUBLISHABLE_KEY: 'YOUR-PUBLISHABLE-OR-ANON-KEY'
+  SUPABASE_URL: 'https://ybfrsjyowlrlpzirbbfh.supabase.co',
+  SUPABASE_PUBLISHABLE_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InliZnJzanlvd2xybHB6aXJiYmZoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE4NzQwNjEsImV4cCI6MjEwNzQ1MDA2MX0.fZ3ycLCYl7Ytuk2qjZ98zVpQcJ3YDJhZu6HO39gzEAY'
 };
 
 (function () {
