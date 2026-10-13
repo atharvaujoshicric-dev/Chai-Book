@@ -49,7 +49,18 @@ function initialPassword(fullName: string, mobile: string): string {
 }
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  if (req.method === "OPTIONS") {
+    // Preflight: echo back whatever headers the browser says it will send. Newer supabase-js
+    // versions add extra x-supabase-* headers; a fixed list would make the browser block the call.
+    return new Response(null, {
+      status: 204,
+      headers: {
+        ...corsHeaders,
+        "Access-Control-Allow-Headers": req.headers.get("Access-Control-Request-Headers") ?? corsHeaders["Access-Control-Allow-Headers"],
+        "Access-Control-Max-Age": "86400",
+      },
+    });
+  }
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
   try {

@@ -289,7 +289,7 @@
           var platform = j && typeof j.message === 'string' ? j.message : (txt || '').slice(0, 200);
           var msg;
           if (fromFn) msg = fromFn;
-          else if (!status) msg = 'Could not reach the "' + name + '" function. Check your internet, that the function is deployed with exactly this name, and the Supabase URL in supabase.js.';
+          else if (!status) msg = 'Could not reach the "' + name + '" function. Quick test: open ' + window.CHAI_CONFIG.SUPABASE_URL.replace(/\/$/, '') + '/functions/v1/' + name + ' in a new browser tab. "Method not allowed" = working (redeploy the latest file); "NOT_FOUND" = not deployed or wrongly named; "Missing authorization header" = turn Verify JWT off and redeploy.';
           else if (status === 404) msg = 'The "' + name + '" function is not deployed in this Supabase project (404). See README step 5.';
           else if (status === 401) msg = 'Supabase rejected the login token before the function ran (401' + (platform ? ': ' + platform : '') + '). In Dashboard → Edge Functions → ' + name + ', turn OFF "Verify JWT" (the function checks the owner itself) and redeploy.';
           else msg = 'The "' + name + '" function failed (HTTP ' + status + (platform ? ': ' + platform : '') + '). Open Dashboard → Edge Functions → ' + name + ' → Logs for details.';

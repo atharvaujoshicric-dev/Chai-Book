@@ -35,7 +35,17 @@ function tempPassword(length = 10): string {
 }
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  if (req.method === "OPTIONS") {
+    // Preflight: echo back whatever headers the browser says it will send (see create-customer).
+    return new Response(null, {
+      status: 204,
+      headers: {
+        ...corsHeaders,
+        "Access-Control-Allow-Headers": req.headers.get("Access-Control-Request-Headers") ?? corsHeaders["Access-Control-Allow-Headers"],
+        "Access-Control-Max-Age": "86400",
+      },
+    });
+  }
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
   try {
