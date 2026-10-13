@@ -31,6 +31,17 @@ function normalizeMobile(raw: string): string | null {
   return /^[6-9][0-9]{9}$/.test(d) ? d : null;
 }
 
+// Internal Supabase Auth email for a customer (customers never see or use it).
+// Default: ownername+ck9876543210@owner-domain  (real domain => passes Supabase's email check).
+function internalEmail(ownerEmail: string, mobile: string, domainOverride: string): string | null {
+  if (domainOverride) return `${mobile}@${domainOverride}`;
+  const at = ownerEmail.lastIndexOf("@");
+  if (at < 1) return null;
+  const local = ownerEmail.slice(0, at).split("+")[0];
+  const domain = ownerEmail.slice(at + 1);
+  return `${local}+ck${mobile}@${domain}`.toLowerCase();
+}
+
 function initialPassword(fullName: string, mobile: string): string {
   const first = fullName.trim().split(/\s+/)[0] ?? "";
   const letters = first.toLowerCase().replace(/[^a-z]/g, "");
@@ -45,7 +56,10 @@ Deno.serve(async (req) => {
     const url = Deno.env.get("SUPABASE_URL");
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
     if (!url || !serviceKey) return json({ error: "Server is not configured." }, 500);
-    const loginDomain = Deno.env.get("LOGIN_EMAIL_DOMAIN") ?? "chaikhata.example";
+    // Optional override. By default the internal login email is derived from the OWNER's real
+    // email (plus-addressing), because Supabase Auth rejects emails whose domain has no mail server
+    // (e.g. made-up domains like chaikhata.example).
+    const loginDomainOverride = (Deno.env.get("LOGIN_EMAIL_DOMAIN") ?? "").trim();
 
     const admin = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
 
@@ -58,7 +72,7 @@ Deno.serve(async (req) => {
     // 2. Authorize: caller must be an active owner
     const { data: caller } = await admin
       .from("profiles")
-      .select("id, stall_id, role, is_active")
+      .select("id, stall_id, role, is_active, login_email")
       .eq("id", userData.user.id)
       .maybeSingle();
     if (!caller || caller.role !== "owner" || !caller.is_active) {
@@ -92,7 +106,8 @@ Deno.serve(async (req) => {
 
     // 5. Create the auth user with the generated initial password
     const password = initialPassword(fullName, mobile);
-    const loginEmail = `${mobile}@${loginDomain}`;
+    const loginEmail = internalEmail(String(caller.login_email ?? userData.user.email ?? ""), mobile, loginDomainOverride);
+    if (!loginEmail) return json({ error: "Could not derive a login address from the owner's email." }, 500);
     const { data: created, error: createErr } = await admin.auth.admin.createUser({
       email: loginEmail,
       password,
@@ -101,7 +116,8 @@ Deno.serve(async (req) => {
     });
     if (createErr || !created?.user) {
       console.error("createUser failed:", createErr?.message);
-      return json({ error: "Could not create the account. If this keeps happening, see the README troubleshooting section." }, 400);
+      // Show the real reason to the owner (e.g. password policy, invalid email, already registered).
+      return json({ error: "Could not create the login: " + (createErr?.message ?? "unknown error") }, 400);
     }
 
     // 6. Create the profile; roll back the auth user if that fails
@@ -120,7 +136,7 @@ Deno.serve(async (req) => {
     if (profileErr) {
       console.error("profile insert failed:", profileErr.message);
       await admin.auth.admin.deleteUser(created.user.id);
-      return json({ error: "Could not save the customer. Please try again." }, 500);
+      return json({ error: "Could not save the customer: " + profileErr.message }, 500);
     }
 
     return json({

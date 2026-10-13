@@ -320,6 +320,20 @@ table.mini th:nth-child(n+2), table.mini td:nth-child(n+2) { text-align: right; 
 .toast.success { background: var(--green); }
 .toast.error { background: var(--red); }
 
+/* ---------- customer notifications ---------- */
+.shell.customer .topbar .brand-sm { flex: 1; }
+.bell { position: relative; font-size: 22px; }
+.bell-badge { position: absolute; top: 0; right: 0; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 999px;
+  background: var(--orange); color: #fff; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center;
+  border: 2px solid var(--brown); }
+.notif-banner { display: flex; gap: 12px; align-items: flex-start; width: 100%; text-align: left; margin-bottom: 14px; padding: 14px 16px;
+  background: var(--orange-l); border: 1.5px solid var(--orange); border-radius: var(--radius); color: var(--brown); font: inherit; cursor: pointer;
+  box-shadow: var(--shadow); }
+.notif-banner .ico { font-size: 26px; line-height: 1.2; }
+.notif-banner small { color: var(--brown-2); }
+.l-item.notif { border-left-color: #c9b9a0; }
+.l-item.notif.unread { border-left-color: var(--orange); background: #fffaf0; }
+
 /* ---------- misc ---------- */
 .kv { display: grid; grid-template-columns: 120px 1fr; gap: 8px 12px; margin: 0; }
 .kv dt { color: var(--muted); font-weight: 600; font-size: 13px; }

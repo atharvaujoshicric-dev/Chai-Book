@@ -46,6 +46,10 @@ create unique index if not exists profiles_mobile_key      on public.profiles (m
 create unique index if not exists profiles_username_key    on public.profiles (username) where username is not null;
 create index        if not exists profiles_stall_role_idx  on public.profiles (stall_id, role);
 
+-- Customer notification bell: everything newer than this moment is "unread".
+-- (existing rows default to now(), so old history is not shown as new)
+alter table public.profiles add column if not exists notifications_seen_at timestamptz not null default now();
+
 -- ---------------------------------------------------------------------
 -- 2. HELPER FUNCTIONS used by RLS policies (SECURITY DEFINER avoids
 --    recursive policy evaluation on profiles)
@@ -268,6 +272,11 @@ begin
     v_old := to_jsonb(old); v_new := null;
   elsif tg_op = 'UPDATE' then
     v_old := to_jsonb(old); v_new := to_jsonb(new);
+    -- viewing notifications only moves a timestamp; don't flood the audit log with it
+    if tg_table_name = 'profiles'
+       and (v_new - 'notifications_seen_at' - 'updated_at') = (v_old - 'notifications_seen_at' - 'updated_at') then
+      return null;
+    end if;
   else
     v_old := null; v_new := to_jsonb(new);
   end if;
@@ -550,6 +559,16 @@ begin
   update public.profiles set must_change_password = false where id = auth.uid();
 end $$;
 
+-- 6e-2. Customer opens the notification bell: everything up to now counts as read.
+--       Returns the server timestamp so the app and database agree.
+create or replace function public.mark_notifications_seen()
+returns timestamptz language plpgsql security definer set search_path = public as $$
+declare v_now timestamptz := now();
+begin
+  update public.profiles set notifications_seen_at = v_now where id = auth.uid();
+  return v_now;
+end $$;
+
 -- 6f. Login helper: turns a mobile number / username / owner email into the
 --     internal auth email. Returns a dummy address for unknown users so the
 --     response does not reveal whether an account exists.
@@ -690,8 +709,20 @@ grant execute on function public.record_payment(uuid, numeric, text, text, uuid)
 grant execute on function public.record_adjustment(uuid, text, numeric, text, uuid) to authenticated;
 grant execute on function public.reverse_transaction(uuid, text, uuid)            to authenticated;
 grant execute on function public.mark_password_changed()                          to authenticated;
+grant execute on function public.mark_notifications_seen()                        to authenticated;
 grant execute on function public.report_daily(date, date)                         to authenticated;
 grant execute on function public.resolve_login(text)                              to anon, authenticated;
+
+-- Live notifications: let Supabase Realtime broadcast new ledger rows.
+-- RLS still applies, so a customer only ever receives events for their own rows.
+do $$
+begin
+  if exists (select 1 from pg_publication where pubname = 'supabase_realtime')
+     and not exists (select 1 from pg_publication_tables
+                      where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'transactions') then
+    alter publication supabase_realtime add table public.transactions;
+  end if;
+end $$;
 
 -- ---------------------------------------------------------------------
 -- 9. ONE-TIME OWNER BOOTSTRAP + OPTIONAL DEMO DATA (run manually, see README)

@@ -596,7 +596,118 @@
   /* ------------------------------------------------------------------ */
   /* Session lifecycle                                                   */
   /* ------------------------------------------------------------------ */
+  /* ---------- customer notifications (bell, feed, live alerts) ---------- */
+  var notif = { items: [], channel: null, timer: null, known: null };
+
+  function localSeenKey() { return 'ck_seen_' + (state.profile ? state.profile.id : ''); }
+  function getSeenAt() {
+    var a = state.profile && state.profile.notifications_seen_at ? new Date(state.profile.notifications_seen_at).getTime() : 0;
+    var b = 0;
+    try { b = Number(localStorage.getItem(localSeenKey())) || 0; } catch (e) { /* storage unavailable */ }
+    return Math.max(a, b);
+  }
+  function notifUnread() {
+    var s = getSeenAt();
+    return notif.items.filter(function (t) { return new Date(t.created_at).getTime() > s; });
+  }
+  function notifIcon(t) {
+    if (t.kind === 'purchase') return '🧾';
+    if (t.kind === 'payment') return '💰';
+    if (t.kind === 'reversal') return '↩️';
+    return '✏️';
+  }
+  function notifText(t) {
+    var amt = money(t.amount);
+    if (t.kind === 'purchase') { var s = itemsSummary(t); return 'Purchase of ' + amt + ' added' + (s ? ': ' + s : ''); }
+    if (t.kind === 'payment') return 'Payment of ' + amt + ' received' + (t.payment_method ? ' via ' + t.payment_method : '');
+    if (t.kind === 'debit_adjustment') return 'Charge adjustment of ' + amt + ' added to your account';
+    if (t.kind === 'credit_adjustment') return 'Credit adjustment of ' + amt + ' applied to your account';
+    if (t.kind === 'reversal') {
+      var what = t.ledger_kind === 'purchase' ? 'Purchase' : t.ledger_kind === 'payment' ? 'Payment' : 'Adjustment';
+      return what + ' of ' + amt + ' was reversed by the stall';
+    }
+    return txLabel(t);
+  }
+  function updateBell() {
+    var b = $('#bellBadge'); if (!b) return;
+    var n = notifUnread().length;
+    b.textContent = n > 9 ? '9+' : String(n);
+    b.classList.toggle('hidden', n === 0);
+  }
+  function loadNotifications() {
+    return q(sb.from('transactions').select('*, transaction_items(id,product_name,quantity,unit_price,line_total)')
+      .eq('customer_id', state.profile.id).order('created_at', { ascending: false }).limit(30)).then(function (rows) {
+      notif.items = rows; updateBell(); return rows;
+    });
+  }
+  // Reload the feed; when `announce` is true, pop a toast for entries we have not seen arrive before.
+  function refreshNotifications(announce) {
+    if (!state.profile || isOwner()) return Promise.resolve();
+    var prev = notif.known;
+    return loadNotifications().then(function (rows) {
+      var ids = {};
+      rows.forEach(function (t) { ids[t.id] = 1; });
+      if (announce && prev) {
+        var fresh = rows.filter(function (t) { return !prev[t.id]; });
+        if (fresh.length) {
+          toast('🔔 ' + notifText(fresh[0]) + ' · ' + fmtDate(fresh[0].created_at) + ', ' + fmtTime(fresh[0].created_at), 'info', 9000);
+          var name = currentRoute().name;
+          if ((name === 'home' || name === 'ledger') && !$('#modal-root').children.length) route();
+        }
+      }
+      notif.known = ids;
+    }).catch(function (err) { if (err && err.expired) handleError(err); });
+  }
+  function stopNotifications() {
+    if (notif.timer) clearInterval(notif.timer);
+    if (notif.channel && window.sb) { try { sb.removeChannel(notif.channel); } catch (e) { /* ignore */ } }
+    notif.items = []; notif.channel = null; notif.timer = null; notif.known = null;
+  }
+  function startNotifications() {
+    stopNotifications();
+    if (!state.profile || isOwner()) return;
+    var uid = state.profile.id;
+    refreshNotifications(false);
+    try {
+      // Live push (needs the Realtime step in supabase-setup.sql); RLS limits events to this customer's own rows.
+      notif.channel = sb.channel('khata-' + uid)
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'transactions', filter: 'customer_id=eq.' + uid },
+          function () { setTimeout(function () { refreshNotifications(true); }, 500); })
+        .subscribe();
+    } catch (e) { console.warn('Realtime unavailable, falling back to polling.', e); }
+    notif.timer = setInterval(function () { refreshNotifications(true); }, 60000); // safety net if Realtime is off
+  }
+  function markNotificationsSeen() {
+    return Promise.resolve(sb.rpc('mark_notifications_seen')).then(function (res) {
+      if (res.error) throw res.error;
+      if (state.profile) state.profile.notifications_seen_at = res.data;
+      try { localStorage.removeItem(localSeenKey()); } catch (e) { /* ignore */ }
+    }).catch(function () {
+      try { localStorage.setItem(localSeenKey(), String(Date.now())); } catch (e) { /* ignore */ }
+    }).then(updateBell);
+  }
+  function openNotifications() {
+    var seen = getSeenAt();
+    var list = notif.items.length ? '<div class="ledger">' + notif.items.map(function (t) {
+      var isNew = new Date(t.created_at).getTime() > seen;
+      return '<article class="l-item notif' + (isNew ? ' unread' : '') + '"><div class="l-title">' + notifIcon(t) + ' ' + esc(notifText(t)) + (isNew ? ' <span class="badge orange">New</span>' : '') + '</div>' +
+        '<div class="l-when">' + fmtDate(t.created_at) + ' · ' + fmtTime(t.created_at) + '</div>' +
+        (t.note ? '<div class="l-note">“' + esc(t.note) + '”</div>' : '') + '</article>';
+    }).join('') + '</div>' : emptyHTML('🔔', 'No updates yet', 'You will be notified here whenever the stall adds a purchase or payment to your khata.');
+    openModal({
+      title: 'Notifications', size: 'lg',
+      html: list + '<div class="form-actions"><a class="btn primary" href="#/ledger" data-close>Open my ledger</a></div>'
+    });
+    markNotificationsSeen();
+  }
+  function notifBannerHTML() {
+    var un = notifUnread(); if (!un.length) return '';
+    return '<button type="button" class="notif-banner" id="notifBanner"><span class="ico">🔔</span><span><b>' + un.length + ' new update' + (un.length > 1 ? 's' : '') + ' from the stall</b><br>' +
+      esc(notifText(un[0])) + '<br><small>' + fmtDate(un[0].created_at) + ' · ' + fmtTime(un[0].created_at) + '</small></span></button>';
+  }
+
   function resetState() {
+    stopNotifications();
     state.profile = null; state.stall = null; state.customers = []; state.products = [];
     entry.customerId = null; entry.cart.clear(); entry.note = ''; entry.sigs = {}; entry.ids = {};
     state.renderToken++;
@@ -652,6 +763,7 @@
       '<div class="side-foot"><div class="who">' + esc(state.profile.full_name) + '<small>' + (owner ? 'Owner' : 'Customer') + '</small></div>' +
       '<button class="btn ghost light" id="logoutSide">Sign out</button></div></aside>' +
       '<div class="main"><header class="topbar"><div class="brand-sm">☕ Chai Khata</div><h1 id="pageTitle"></h1>' +
+      (owner ? '' : '<button class="icon-btn bell" id="bellBtn" title="Notifications" aria-label="Notifications">🔔<span class="bell-badge hidden" id="bellBadge">0</span></button>') +
       '<button class="icon-btn" id="logoutTop" title="Sign out" aria-label="Sign out">⎋</button></header>' +
       '<main id="view" class="view" tabindex="-1"></main></div>' +
       '<nav class="bottom-nav" aria-label="Main">' +
@@ -659,6 +771,7 @@
       (hasMore ? '<button id="moreBtn"><span class="ico">⋯</span>More</button>' : '') + '</nav></div>';
     $('#logoutSide').onclick = signOut;
     $('#logoutTop').onclick = signOut;
+    if (!owner) { $('#bellBtn').onclick = openNotifications; updateBell(); startNotifications(); }
     var more = $('#moreBtn');
     if (more) more.onclick = function () {
       var rest = OWNER_NAV.filter(function (n) { return !n.bottom; });
@@ -1291,16 +1404,19 @@
   function viewHome(el, r, alive) {
     return Promise.all([
       q(sb.from('customer_balances').select('*').eq('customer_id', state.profile.id).maybeSingle()),
-      fetchAll(function () { return sb.from('transactions').select('*, transaction_items(id,product_name,quantity,unit_price,line_total)').eq('customer_id', state.profile.id).order('created_at', { ascending: true }).order('id'); })
+      fetchAll(function () { return sb.from('transactions').select('*, transaction_items(id,product_name,quantity,unit_price,line_total)').eq('customer_id', state.profile.id).order('created_at', { ascending: true }).order('id'); }),
+      refreshNotifications(false)
     ]).then(function (res) {
       if (!alive()) return;
       var bal = res[0] || { total_purchases: 0, total_payments: 0, balance: 0 };
       var recent = buildLedger(res[1]).slice(-5).reverse();
-      el.innerHTML = '<div class="hero"><div class="label">Hello, ' + esc(state.profile.full_name.split(' ')[0]) + ' 👋 — ' + (Number(bal.balance) > 0 ? 'Outstanding balance' : Number(bal.balance) < 0 ? 'Advance with stall' : 'You are all settled') + '</div>' +
+      el.innerHTML = notifBannerHTML() + '<div class="hero"><div class="label">Hello, ' + esc(state.profile.full_name.split(' ')[0]) + ' 👋 — ' + (Number(bal.balance) > 0 ? 'Outstanding balance' : Number(bal.balance) < 0 ? 'Advance with stall' : 'You are all settled') + '</div>' +
         '<div class="big">' + money(Math.abs(bal.balance)) + '</div><div class="sub">at ' + esc(state.stall.name) + '</div></div>' +
         '<div class="stats"><div class="stat"><div class="label">Total purchases</div><div class="value">' + money(bal.total_purchases) + '</div></div><div class="stat"><div class="label">Total payments</div><div class="value">' + money(bal.total_payments) + '</div></div></div>' +
         '<h2 class="card-title" style="margin-top:6px">Recent activity <a class="btn sm ghost" href="#/ledger">Full ledger</a></h2>' +
         (recent.length ? '<div class="ledger">' + recent.map(function (t) { return ledgerCardHTML(t, false); }).join('') + '</div>' : emptyHTML('☕', 'Nothing here yet', 'Your purchases and payments will appear here.'));
+      var banner = $('#notifBanner', el);
+      if (banner) banner.onclick = openNotifications;
     });
   }
 

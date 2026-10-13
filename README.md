@@ -16,7 +16,8 @@ README.md
 ## How it works (short version)
 
 * **Owner** signs in with email + password. **Customers** sign in with mobile number (or a username) + password.
-* Customers are real Supabase Auth users. Because customers have no email, the Edge Function creates each one with an internal address like `9876543210@chaikhata.example`; the login box converts mobile/username to that address through a small database function (`resolve_login`). Customers never see it.
+* Customers are real Supabase Auth users. Because customers have no email, the Edge Function creates each one with an internal address derived from the **owner's real email** using plus-addressing, e.g. `ramesh+ck9876543210@gmail.com` (Supabase rejects made-up domains that have no mail server). The login box converts mobile/username to that address through a small database function (`resolve_login`). Customers never see it.
+* **Notifications:** whenever the owner records a purchase, payment, adjustment or reversal, the customer's dashboard shows a 🔔 bell with an unread count, a "new updates" banner, and a feed with the **date and time** of each update. If Supabase Realtime is on (the SQL script enables it for the `transactions` table) they also get an instant pop-up while the app is open; otherwise the app checks every minute.
 * **Initial password** = first 3 letters of the first name (lowercase) + first 4 digits of the mobile. Example: *Ramesh*, `9876543210` → `ram9876`. Names with fewer than 3 Latin letters are padded with `x` (*Om* → `omx9876`). The customer is forced to choose a new password at first login.
 * Every money action goes through a database function that checks the caller is the owner, validates input, **reads the product price on the server** (price snapshot stored with each purchase), and is **idempotent** (double-taps and retries can't create duplicates).
 * Ledger rows are **append-only**: update/delete/truncate are blocked by triggers. Fix mistakes with **Reverse**, which adds a mirror entry and keeps the original.
@@ -74,7 +75,7 @@ Dashboard → **Edge Functions → Deploy a new function → Via Editor**. Creat
 
 Optional secrets (Edge Functions → Secrets):
 * `ALLOWED_ORIGIN` — e.g. `https://username.github.io` to restrict browser callers (default `*`; the functions still require the owner's login).
-* `LOGIN_EMAIL_DOMAIN` — domain used for the internal customer emails (default `chaikhata.example`). If creating a customer fails with an "invalid email" error, set this to a domain you control or a real one.
+* `LOGIN_EMAIL_DOMAIN` — optional. Leave it unset: internal customer emails are derived from the owner's email. Only set it if you own a real domain and prefer `9876543210@yourdomain.com`.
 
 ### 6. Add your project keys to the frontend
 Dashboard → **Project Settings → API** (or **API Keys**). Open `supabase.js` and replace:
@@ -111,7 +112,7 @@ All asset paths are relative (`style.css`, `app.js`, `supabase.js`), so it works
 | Products | Add, edit price (past bills unaffected), hide/show |
 | Transactions | All entries by date/type/customer, **Reverse** with a mandatory reason, itemised CSV |
 | Reports | Daily sales + collections split by Cash/UPI/Other, outstanding-balances CSV |
-| Customer app | Balance hero, itemised ledger (product, qty, unit price, total, date, time, notes), date filter, profile, change password |
+| Customer app | 🔔 Notifications (unread bell + feed with date/time), balance hero, itemised ledger (product, qty, unit price, total, date, time, notes), date filter, profile, change password |
 
 ## Security model
 
@@ -140,6 +141,7 @@ All asset paths are relative (`style.css`, `app.js`, `supabase.js`), so it works
 | "Incorrect login or password" for the owner | Make sure you ran `bootstrap_owner` with the same email, and the user is confirmed |
 | Signed in but "account is not set up" | Owner profile missing — run step 3 |
 | "The Edge Function is not deployed yet" | Deploy both functions (step 5) |
-| Create customer says "Could not create the account" | Check password minimum length ≤ 7 (step 4) and try setting `LOGIN_EMAIL_DOMAIN`; see function logs in the dashboard |
+| Create customer shows "Could not create the login: …" | The message after the colon is Supabase's real reason. Typical: password policy (minimum length must be ≤ 7, and turn off "leaked password protection" or it may reject `ram9876`-style passwords) or "email invalid". Redeploy `create-customer` after any update and check **Edge Functions → Logs** |
+| Customers don't get the bell / live alerts | Re-run `supabase-setup.sql` (adds the unread tracking + Realtime) and make sure Realtime isn't disabled for the project. The bell still works without Realtime; alerts then arrive within a minute |
 | Reset-password email link lands on the login page | Add your GitHub Pages URL to **Redirect URLs** (step 4) |
 | Blank page on GitHub Pages | Pages enabled? Files uploaded to the repository root (not inside a sub-folder)? |
