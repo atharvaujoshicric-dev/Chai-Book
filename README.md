@@ -65,13 +65,14 @@ supabase init                # in an empty folder
 mkdir -p supabase/functions
 # copy the two folders from this repo's functions/ into supabase/functions/
 supabase link --project-ref YOUR-PROJECT-REF
-supabase functions deploy create-customer
-supabase functions deploy reset-customer-password
+supabase functions deploy create-customer --no-verify-jwt
+supabase functions deploy reset-customer-password --no-verify-jwt
 ```
+(`--no-verify-jwt` is safe here: both functions check the caller's login token themselves and only allow the stall owner. It avoids the "Invalid JWT" rejection that newer Supabase projects can hit at the gateway.)
 (The repo keeps them under `functions/` as requested; the CLI expects `supabase/functions/`.)
 
 **Option B — Dashboard only (no CLI)**
-Dashboard → **Edge Functions → Deploy a new function → Via Editor**. Create `create-customer`, paste the contents of `functions/create-customer/index.ts`, deploy. Repeat for `reset-customer-password`. Leave **Verify JWT** on.
+Dashboard → **Edge Functions → Deploy a new function → Via Editor**. Create `create-customer`, paste the contents of `functions/create-customer/index.ts`, deploy. Repeat for `reset-customer-password`. Turn **Verify JWT** **off** for both (the code verifies the owner's login itself).
 
 Optional secrets (Edge Functions → Secrets):
 * `ALLOWED_ORIGIN` — e.g. `https://username.github.io` to restrict browser callers (default `*`; the functions still require the owner's login).
@@ -140,7 +141,8 @@ All asset paths are relative (`style.css`, `app.js`, `supabase.js`), so it works
 | "Chai Khata needs setup" screen | `supabase.js` still has the placeholders |
 | "Incorrect login or password" for the owner | Make sure you ran `bootstrap_owner` with the same email, and the user is confirmed |
 | Signed in but "account is not set up" | Owner profile missing — run step 3 |
-| "The Edge Function is not deployed yet" | Deploy both functions (step 5) |
+| "…function is not deployed in this Supabase project (404)" | Deploy both functions (step 5), named exactly `create-customer` and `reset-customer-password` |
+| "Request failed" / "function failed (HTTP …)" when adding a customer | The message now includes the HTTP status. Open **Dashboard → Edge Functions → create-customer → Logs**. Most common fixes: deploy with Verify JWT off, check the function name, redeploy after replacing the file |
 | Create customer shows "Could not create the login: …" | The message after the colon is Supabase's real reason. Typical: password policy (minimum length must be ≤ 7, and turn off "leaked password protection" or it may reject `ram9876`-style passwords) or "email invalid". Redeploy `create-customer` after any update and check **Edge Functions → Logs** |
 | Customers don't get the bell / live alerts | Re-run `supabase-setup.sql` (adds the unread tracking + Realtime) and make sure Realtime isn't disabled for the project. The bell still works without Realtime; alerts then arrive within a minute |
 | Reset-password email link lands on the login page | Add your GitHub Pages URL to **Redirect URLs** (step 4) |

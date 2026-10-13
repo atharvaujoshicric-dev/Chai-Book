@@ -281,10 +281,21 @@
       if (res.error) {
         var ctx = res.error.context;
         var status = ctx && ctx.status;
-        var p = ctx && typeof ctx.json === 'function' ? ctx.json().catch(function () { return null; }) : Promise.resolve(null);
-        return p.then(function (j) {
-          var e = new Error((j && j.error) || (status === 404 ? 'The Edge Function is not deployed yet. See the README.' : 'Request failed. Please try again.'));
-          e.expired = status === 401;
+        var read = ctx && typeof ctx.text === 'function' ? ctx.text().catch(function () { return ''; }) : Promise.resolve('');
+        return read.then(function (txt) {
+          var j = null;
+          try { j = JSON.parse(txt); } catch (ignore) { /* not JSON */ }
+          var fromFn = j && typeof j.error === 'string' ? j.error : '';   // our own function answered
+          var platform = j && typeof j.message === 'string' ? j.message : (txt || '').slice(0, 200);
+          var msg;
+          if (fromFn) msg = fromFn;
+          else if (!status) msg = 'Could not reach the "' + name + '" function. Check your internet, that the function is deployed with exactly this name, and the Supabase URL in supabase.js.';
+          else if (status === 404) msg = 'The "' + name + '" function is not deployed in this Supabase project (404). See README step 5.';
+          else if (status === 401) msg = 'Supabase rejected the login token before the function ran (401' + (platform ? ': ' + platform : '') + '). In Dashboard → Edge Functions → ' + name + ', turn OFF "Verify JWT" (the function checks the owner itself) and redeploy.';
+          else msg = 'The "' + name + '" function failed (HTTP ' + status + (platform ? ': ' + platform : '') + '). Open Dashboard → Edge Functions → ' + name + ' → Logs for details.';
+          console.error('Edge Function error', name, status, txt, res.error);
+          var e = new Error(msg);
+          e.expired = status === 401 && !!fromFn;   // only a real "session expired" answer from our function logs the user out
           throw e;
         });
       }
