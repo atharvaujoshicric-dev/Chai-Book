@@ -810,7 +810,7 @@
   /* ------------------------------------------------------------------ */
   /* UPI payment QR + WhatsApp reminders                                 */
   /* ------------------------------------------------------------------ */
-  function validUpi(v) { return /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z][a-zA-Z0-9]{1,63}$/.test(v); }
+  function validUpi(v) { return /^[a-zA-Z0-9._-]{2,100}@[a-zA-Z][a-zA-Z0-9]{1,63}$/.test(v); }
   function upiLink(upi, payee, amount, note) {
     var u = 'upi://pay?pa=' + encodeURIComponent(upi).replace(/%40/g, '@') + '&pn=' + encodeURIComponent(payee) + '&cu=INR';
     if (amount > 0) u += '&am=' + Number(amount).toFixed(2);
@@ -885,10 +885,11 @@
             '<div class="field"><label for="remMsg">Message (edit if you like)</label><textarea id="remMsg" rows="7"></textarea></div>' +
             '<div class="rem-actions"><button type="button" class="btn wa block" id="remWa">💬 Open WhatsApp chat with ' + esc(firstName(c.full_name)) + '</button>' +
             '<button type="button" class="btn block" id="remShare"></button>' +
+            '<button type="button" class="btn ghost block hidden" id="remShare2">📤 Share picture + message (pick the chat yourself)</button>' +
             '<button type="button" class="btn ghost block" id="remCopy">Copy message</button></div>' +
-            '<p class="hint" id="remHint">A WhatsApp link can only carry text. To send the QR picture too, tap “Share QR image”, choose WhatsApp and pick the customer — or open the chat and attach the downloaded image.</p>' +
+            '<p class="hint" id="remHint">WhatsApp links can only carry text. “Open chat + get QR image” opens the customer’s chat with the message and saves the QR so you can attach it (📎), or pastes it with Ctrl+V on WhatsApp Web.</p>' +
             (list.length > 1 ? '<div class="form-actions"><button type="button" class="btn ghost" id="remNext">Skip →</button></div>' : '');
-          var amtEl = $('#remAmt', body), msgEl = $('#remMsg', body), qrBox = $('#remQrBox', body), shareBtn = $('#remShare', body);
+          var amtEl = $('#remAmt', body), msgEl = $('#remMsg', body), qrBox = $('#remQrBox', body), shareBtn = $('#remShare', body), share2 = $('#remShare2', body);
           function curAmount() { var v = amtEl.value.trim(); return v === '' ? 0 : parseAmount(v); }
           function refresh() {
             var amt = curAmount();
@@ -896,15 +897,16 @@
             amtEl.removeAttribute('aria-invalid');
             if (!dirty) msgEl.value = reminderMessage(c, amt, opts.lead);
             file = null;
-            shareBtn.classList.add('hidden');
+            shareBtn.classList.add('hidden'); share2.classList.add('hidden');
             if (amt > 0 && upi) {
               qrBox.innerHTML = '<canvas id="remQr" role="img" aria-label="UPI payment QR code"></canvas>';
               var cv = $('#remQr', qrBox);
               var ok = drawPayCard(cv, upiLink(upi, state.stall.name, amt, 'Khata dues'), { stall: state.stall.name, amount: amt, upi: upi });
               if (!ok) { qrBox.innerHTML = '<div class="qr-missing">The QR code could not be generated. The UPI ID is still included in the message.</div>'; return; }
               cv.toBlob(function (blob) { if (blob) file = new File([blob], 'pay-' + String(c.full_name).toLowerCase().replace(/[^a-z0-9]+/g, '-') + '.png', { type: 'image/png' }); });
-              shareBtn.textContent = canShare ? '📤 Share QR image + message' : '⬇ Download QR image';
+              shareBtn.textContent = '💬 Open chat + get QR image';
               shareBtn.classList.remove('hidden');
+              if (canShare) share2.classList.remove('hidden');
             } else if (!upi) {
               qrBox.innerHTML = '<div class="qr-missing">Add your UPI ID in <a href="#/settings" data-close>Settings</a> to include a payment QR.</div>';
             } else {
@@ -926,15 +928,27 @@
             window.open('https://wa.me/91' + c.mobile + '?text=' + encodeURIComponent(msg), '_blank', 'noopener');
             markSent();
           };
+          // Open the customer's chat with the text, and at the same time put the QR picture on the clipboard
+          // (paste it in WhatsApp Web/desktop) or save it (attach it from the gallery on a phone).
           shareBtn.onclick = function () {
-            if (!file) return toast('The QR is still getting ready — try again in a second.', 'error');
             var msg = msgEl.value.trim();
-            if (canShare) {
-              navigator.share({ files: [file], text: msg }).then(markSent).catch(function (e) {
-                if (e && e.name === 'AbortError') return;
-                downloadBlob(file, file.name); toast('Sharing failed, so the QR image was downloaded instead.', 'error');
-              });
-            } else { downloadBlob(file, file.name); toast('QR image downloaded. Attach it in the WhatsApp chat.', 'success'); }
+            if (!msg) return toast('The message is empty.', 'error');
+            window.open('https://wa.me/91' + c.mobile + '?text=' + encodeURIComponent(msg), '_blank', 'noopener');   // must run straight from the tap
+            markSent();
+            if (!file) return;
+            var f = file, saved = function () { downloadBlob(f, f.name); toast('Chat opened. QR image saved — tap 📎 in WhatsApp and attach it.', 'success'); };
+            try {
+              if (navigator.clipboard && window.ClipboardItem && !isTouch()) {
+                navigator.clipboard.write([new ClipboardItem({ 'image/png': f })]).then(function () { toast('Chat opened. QR image copied — press Ctrl+V in the chat to paste it.', 'success'); }, saved);
+              } else saved();
+            } catch (e) { saved(); }
+          };
+          share2.onclick = function () {
+            if (!file) return toast('The QR is still getting ready — try again in a second.', 'error');
+            navigator.share({ files: [file], text: msgEl.value.trim() }).then(markSent).catch(function (e) {
+              if (e && e.name === 'AbortError') return;
+              downloadBlob(file, file.name); toast('Sharing failed, so the QR image was downloaded instead.', 'error');
+            });
           };
           $('#remCopy', body).onclick = function () { copyText(msgEl.value).then(function () { toast('Message copied.', 'success'); }, function () { toast('Could not copy.', 'error'); }); };
           var nxt = $('#remNext', body);
