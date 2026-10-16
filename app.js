@@ -883,8 +883,8 @@
             '<div class="field"><label for="remAmt">Amount to request (₹)</label><input id="remAmt" class="input" type="text" inputmode="decimal" autocomplete="off" value="' + (due ? due.toFixed(2) : '') + '" placeholder="0.00"></div>' +
             '<div id="remQrBox" class="qr-box"></div>' +
             '<div class="field"><label for="remMsg">Message (edit if you like)</label><textarea id="remMsg" rows="7"></textarea></div>' +
-            '<div class="rem-actions"><button type="button" class="btn wa block" id="remWa">💬 Open WhatsApp chat with ' + esc(firstName(c.full_name)) + '</button>' +
-            '<button type="button" class="btn block" id="remShare"></button>' +
+            '<div class="rem-actions"><a class="btn wa block" id="remWa" target="_blank" rel="noopener" href="#">💬 Open WhatsApp chat with ' + esc(firstName(c.full_name)) + '</a>' +
+            '<a class="btn block" id="remShare" target="_blank" rel="noopener" href="#"></a>' +
             '<button type="button" class="btn ghost block hidden" id="remShare2">📤 Share picture + message (pick the chat yourself)</button>' +
             '<button type="button" class="btn ghost block" id="remCopy">Copy message</button></div>' +
             '<p class="hint" id="remHint">WhatsApp links can only carry text. “Open chat + get QR image” opens the customer’s chat with the message and saves the QR so you can attach it (📎), or pastes it with Ctrl+V on WhatsApp Web.</p>' +
@@ -896,6 +896,7 @@
             if (isNaN(amt)) { amtEl.setAttribute('aria-invalid', 'true'); return; }
             amtEl.removeAttribute('aria-invalid');
             if (!dirty) msgEl.value = reminderMessage(c, amt, opts.lead);
+            syncLinks();
             file = null;
             shareBtn.classList.add('hidden'); share2.classList.add('hidden');
             if (amt > 0 && upi) {
@@ -913,6 +914,8 @@
               qrBox.innerHTML = '';
             }
           }
+          function waHref() { return 'https://wa.me/91' + c.mobile + '?text=' + encodeURIComponent(msgEl.value.trim()); }
+          function syncLinks() { $('#remWa', body).href = waHref(); shareBtn.href = waHref(); }
           function markSent() {
             markReminded(c.customer_id); sent = true;
             if (opts.onSent) opts.onSent();
@@ -921,27 +924,23 @@
             nx && nx.classList.add('primary');
           }
           amtEl.oninput = refresh;
-          msgEl.oninput = function () { dirty = true; };
-          $('#remWa', body).onclick = function () {
-            var msg = msgEl.value.trim();
-            if (!msg) return toast('The message is empty.', 'error');
-            window.open('https://wa.me/91' + c.mobile + '?text=' + encodeURIComponent(msg), '_blank', 'noopener');
-            markSent();
+          msgEl.oninput = function () { dirty = true; syncLinks(); };
+          $('#remWa', body).onclick = function (e) {
+            if (!msgEl.value.trim()) { e.preventDefault(); return toast('The message is empty.', 'error'); }
+            syncLinks(); markSent();          // the link itself opens WhatsApp
           };
           // Open the customer's chat with the text, and at the same time put the QR picture on the clipboard
           // (paste it in WhatsApp Web/desktop) or save it (attach it from the gallery on a phone).
-          shareBtn.onclick = function () {
-            var msg = msgEl.value.trim();
-            if (!msg) return toast('The message is empty.', 'error');
-            window.open('https://wa.me/91' + c.mobile + '?text=' + encodeURIComponent(msg), '_blank', 'noopener');   // must run straight from the tap
-            markSent();
+          shareBtn.onclick = function (e) {
+            if (!msgEl.value.trim()) { e.preventDefault(); return toast('The message is empty.', 'error'); }
+            syncLinks(); markSent();          // the link itself opens the chat
             if (!file) return;
             var f = file, saved = function () { downloadBlob(f, f.name); toast('Chat opened. QR image saved — tap 📎 in WhatsApp and attach it.', 'success'); };
             try {
               if (navigator.clipboard && window.ClipboardItem && !isTouch()) {
                 navigator.clipboard.write([new ClipboardItem({ 'image/png': f })]).then(function () { toast('Chat opened. QR image copied — press Ctrl+V in the chat to paste it.', 'success'); }, saved);
               } else saved();
-            } catch (e) { saved(); }
+            } catch (err) { saved(); }
           };
           share2.onclick = function () {
             if (!file) return toast('The QR is still getting ready — try again in a second.', 'error');
