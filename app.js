@@ -17,18 +17,19 @@
   var SESSION_MSG = 'Your session has expired. Please sign in again.';
 
   var OWNER_NAV = [
-    { id: 'dashboard', label: 'Dashboard', icon: '🏠', bottom: true },
-    { id: 'entry', label: 'New Entry', icon: '➕', bottom: true },
-    { id: 'customers', label: 'Customers', icon: '👥', bottom: true },
-    { id: 'transactions', label: 'Transactions', icon: '🧾', bottom: true },
-    { id: 'products', label: 'Products', icon: '☕' },
-    { id: 'reports', label: 'Reports', icon: '📊' },
-    { id: 'settings', label: 'Settings', icon: '⚙️' }
+    { id: 'dashboard', label: 'Home', title: 'Dashboard', icon: '\uD83C\uDFE0', bottom: true },
+    { id: 'entry', label: 'Entry', title: 'New Entry', icon: '\uFF0B', fab: true },
+    { id: 'customers', label: 'Customers', title: 'Customers', icon: '\uD83D\uDC65', bottom: true },
+    { id: 'dues', label: 'Dues', title: 'Dues & Reminders', icon: '\uD83D\uDCB0', bottom: true },
+    { id: 'transactions', label: 'Transactions', title: 'Transactions', icon: '\uD83E\uDDFE' },
+    { id: 'products', label: 'Products', title: 'Products', icon: '\u2615' },
+    { id: 'reports', label: 'Reports', title: 'Reports', icon: '\uD83D\uDCCA' },
+    { id: 'settings', label: 'Settings', title: 'Settings', icon: '\u2699\uFE0F' }
   ];
   var CUSTOMER_NAV = [
-    { id: 'home', label: 'Home', icon: '🏠', bottom: true },
-    { id: 'ledger', label: 'Ledger', icon: '📒', bottom: true },
-    { id: 'profile', label: 'Profile', icon: '👤', bottom: true }
+    { id: 'home', label: 'Home', icon: '\uD83C\uDFE0', bottom: true },
+    { id: 'ledger', label: 'Ledger', icon: '\uD83D\uDCD2', bottom: true },
+    { id: 'profile', label: 'Profile', icon: '\uD83D\uDC64', bottom: true }
   ];
 
   var TX_SELECT = '*, customer:profiles!transactions_customer_id_fkey(full_name,mobile), transaction_items(id,product_name,quantity,unit_price,line_total)';
@@ -49,6 +50,8 @@
     customerId: null,
     cart: new Map(),
     note: '',
+    done: null,
+    method: null,
     sigs: {},
     ids: {}
   };
@@ -189,12 +192,17 @@
     }
     document.addEventListener('keydown', onKey);
     wrap.addEventListener('mousedown', function (e) { if (e.target === wrap) close(); });
-    $$('[data-close]', wrap).forEach(function (b) { b.addEventListener('click', close); });
+    wrap.addEventListener('click', function (e) { if (e.target.closest('[data-close]')) close(); });
     var body = $('.modal-body', wrap);
     if (opts.onMount) opts.onMount(body, close);
     var first = $('input:not([disabled]):not([type=hidden]):not([type=radio]),select,textarea', body);
     if (first && !/Mobi|Android/i.test(navigator.userAgent)) first.focus();
     return close;
+  }
+
+  function closeAllModals() {
+    var b, guard = 0;
+    while (guard++ < 10 && (b = $('#modal-root .modal-backdrop:last-child .modal-head [data-close]'))) b.click();
   }
 
   function confirmDialog(message, okLabel, danger) {
@@ -760,36 +768,235 @@
   }
 
   /* ------------------------------------------------------------------ */
+  /* Per-device conveniences (recents, popular products, reminder log)   */
+  /* ------------------------------------------------------------------ */
+  function lsGet(key, def) { try { var v = localStorage.getItem(key); return v == null ? def : JSON.parse(v); } catch (e) { return def; } }
+  function lsSet(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) { /* storage unavailable */ } }
+  function ukey(k) { return 'ck_' + k + '_' + (state.profile ? state.profile.id.slice(0, 8) : ''); }
+  function istDateOf(ts) { return new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date(ts)); }
+  function isTouch() { return !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches); }
+
+  function pushRecent(id) {
+    var a = lsGet(ukey('recent'), []).filter(function (x) { return x !== id; });
+    a.unshift(id); lsSet(ukey('recent'), a.slice(0, 12));
+  }
+  function getRecents() { return lsGet(ukey('recent'), []).filter(function (id) { var c = getCustomer(id); return c && c.is_active; }); }
+  function bumpProducts(ids) { var u = lsGet(ukey('produse'), {}); ids.forEach(function (id) { u[id] = (u[id] || 0) + 1; }); lsSet(ukey('produse'), u); }
+  function markReminded(id) { var m = lsGet(ukey('rem'), {}); m[id] = new Date().toISOString(); lsSet(ukey('rem'), m); }
+  function remindedAt(id) { return lsGet(ukey('rem'), {})[id] || null; }
+  function agoText(ts) {
+    if (!ts) return '';
+    var d = Math.round((Date.parse(todayISO()) - Date.parse(istDateOf(ts))) / 86400000);
+    return d <= 0 ? 'today' : d === 1 ? 'yesterday' : d + ' days ago';
+  }
+  function initials(name) {
+    var p = String(name || '').trim().split(/\s+/);
+    return (((p[0] || '?').charAt(0)) + (p.length > 1 ? p[p.length - 1].charAt(0) : '')).toUpperCase();
+  }
+  function avatarHTML(name) {
+    var h = 0, s = String(name || '');
+    for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 6;
+    return '<span class="avatar a' + h + '" aria-hidden="true">' + esc(initials(s)) + '</span>';
+  }
+  function firstName(n) { return String(n || '').trim().split(/\s+/)[0] || ''; }
+  function nowStamp() { return fmtDate(Date.now()) + ', ' + fmtTime(Date.now()); }
+  function downloadBlob(blob, name) {
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1500);
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* UPI payment QR + WhatsApp reminders                                 */
+  /* ------------------------------------------------------------------ */
+  function validUpi(v) { return /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z][a-zA-Z0-9]{1,63}$/.test(v); }
+  function upiLink(upi, payee, amount, note) {
+    var u = 'upi://pay?pa=' + encodeURIComponent(upi).replace(/%40/g, '@') + '&pn=' + encodeURIComponent(payee) + '&cu=INR';
+    if (amount > 0) u += '&am=' + Number(amount).toFixed(2);
+    if (note) u += '&tn=' + encodeURIComponent(note);
+    return u;
+  }
+  // Draws a shareable "scan to pay" card (stall name, amount, QR, UPI ID) onto a canvas.
+  function drawPayCard(canvas, payload, o) {
+    if (!window.qrcode) return false;
+    var qr;
+    try { qr = window.qrcode(0, 'M'); qr.addData(payload); qr.make(); } catch (e) { console.error(e); return false; }
+    var n = qr.getModuleCount(), W = 640, cell = Math.floor(440 / n), size = cell * n, quiet = 26;
+    var top = o.amount > 0 ? 212 : 152, H = top + size + quiet * 2 + 150;
+    canvas.width = W; canvas.height = H;
+    var g = canvas.getContext('2d'), font = '"Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    g.fillStyle = '#fffdf8'; g.fillRect(0, 0, W, H);
+    g.strokeStyle = '#e8d9bf'; g.lineWidth = 4; g.strokeRect(2, 2, W - 4, H - 4);
+    g.textAlign = 'center'; g.textBaseline = 'alphabetic';
+    function fit(text, y, px, weight, color) {
+      var s = px;
+      g.fillStyle = color;
+      do { g.font = weight + ' ' + s + 'px ' + font; s -= 2; } while (g.measureText(text).width > W - 80 && s > 14);
+      g.fillText(text, W / 2, y);
+    }
+    fit(o.stall, 78, 40, 700, '#3b2314');
+    fit('Scan with any UPI app to pay', 118, 24, 500, '#7a6a5d');
+    if (o.amount > 0) fit('₹' + new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(o.amount), 192, 64, 700, '#c25e0c');
+    var x0 = Math.round((W - size) / 2), y0 = top + quiet;
+    g.fillStyle = '#ffffff'; g.fillRect(x0 - quiet, y0 - quiet, size + quiet * 2, size + quiet * 2);
+    g.fillStyle = '#262220';
+    for (var r = 0; r < n; r++) for (var c = 0; c < n; c++) if (qr.isDark(r, c)) g.fillRect(x0 + c * cell, y0 + r * cell, cell, cell);
+    var yb = y0 + size + quiet;
+    fit('UPI ID: ' + o.upi, yb + 62, 28, 600, '#262220');
+    fit('GPay · PhonePe · Paytm · BHIM', yb + 104, 22, 500, '#7a6a5d');
+    return true;
+  }
+  function canShareFiles() {
+    try {
+      return !!(navigator.canShare && window.File && navigator.canShare({ files: [new File(['x'], 'x.png', { type: 'image/png' })] }));
+    } catch (e) { return false; }
+  }
+  function reminderMessage(c, amount, lead) {
+    var stall = state.stall.name, upi = state.stall.upi_id, L = [];
+    L.push('Hello ' + firstName(c.full_name) + ' 🙏');
+    if (lead) L.push(lead);
+    if (amount > 0) {
+      L.push('Your outstanding balance at *' + stall + '* is *' + money(amount) + '* (as on ' + fmtDate(Date.now()) + ').');
+      L.push(upi ? 'You can pay by UPI to *' + upi + '* using any UPI app (GPay, PhonePe, Paytm…). Thank you!' : 'Please clear it at your convenience. Thank you!');
+    } else {
+      L.push('Your khata at *' + stall + '* is fully settled. Thank you! ☕');
+    }
+    return L.join('\n\n');
+  }
+
+  // list: customers (balance rows); opts: { lead, onSent }. With several customers it becomes a step-by-step round.
+  function openReminder(list, startAt, opts) {
+    opts = opts || {};
+    var i = startAt || 0;
+    openModal({
+      title: 'WhatsApp reminder', size: 'lg', html: '<div id="remBody"></div>',
+      onMount: function (b, close) {
+        var body = $('#remBody', b);
+        function show() {
+          var c = list[i], upi = state.stall.upi_id, canShare = canShareFiles(), file = null, dirty = false, sent = false;
+          var due = Math.max(round2(Number(c.balance)), 0), last = remindedAt(c.customer_id);
+          body.innerHTML =
+            (list.length > 1 ? '<div class="rem-progress"><span>Customer ' + (i + 1) + ' of ' + list.length + '</span><div class="bar"><i style="width:' + Math.round((i + 1) / list.length * 100) + '%"></i></div></div>' : '') +
+            '<div class="rem-who">' + avatarHTML(c.full_name) + '<div class="rem-name"><b>' + esc(c.full_name) + '</b><div class="muted">' + esc(c.mobile) + (last ? ' · reminded ' + agoText(last) : '') + '</div></div>' +
+            '<div class="rem-due ' + balClass(c.balance) + '">' + money(Math.abs(c.balance)) + '<small>' + balLabel(c.balance) + '</small></div></div>' +
+            '<div class="field"><label for="remAmt">Amount to request (₹)</label><input id="remAmt" class="input" type="text" inputmode="decimal" autocomplete="off" value="' + (due ? due.toFixed(2) : '') + '" placeholder="0.00"></div>' +
+            '<div id="remQrBox" class="qr-box"></div>' +
+            '<div class="field"><label for="remMsg">Message (edit if you like)</label><textarea id="remMsg" rows="7"></textarea></div>' +
+            '<div class="rem-actions"><button type="button" class="btn wa block" id="remWa">💬 Open WhatsApp chat with ' + esc(firstName(c.full_name)) + '</button>' +
+            '<button type="button" class="btn block" id="remShare"></button>' +
+            '<button type="button" class="btn ghost block" id="remCopy">Copy message</button></div>' +
+            '<p class="hint" id="remHint">A WhatsApp link can only carry text. To send the QR picture too, tap “Share QR image”, choose WhatsApp and pick the customer — or open the chat and attach the downloaded image.</p>' +
+            (list.length > 1 ? '<div class="form-actions"><button type="button" class="btn ghost" id="remNext">Skip →</button></div>' : '');
+          var amtEl = $('#remAmt', body), msgEl = $('#remMsg', body), qrBox = $('#remQrBox', body), shareBtn = $('#remShare', body);
+          function curAmount() { var v = amtEl.value.trim(); return v === '' ? 0 : parseAmount(v); }
+          function refresh() {
+            var amt = curAmount();
+            if (isNaN(amt)) { amtEl.setAttribute('aria-invalid', 'true'); return; }
+            amtEl.removeAttribute('aria-invalid');
+            if (!dirty) msgEl.value = reminderMessage(c, amt, opts.lead);
+            file = null;
+            shareBtn.classList.add('hidden');
+            if (amt > 0 && upi) {
+              qrBox.innerHTML = '<canvas id="remQr" role="img" aria-label="UPI payment QR code"></canvas>';
+              var cv = $('#remQr', qrBox);
+              var ok = drawPayCard(cv, upiLink(upi, state.stall.name, amt, 'Khata dues'), { stall: state.stall.name, amount: amt, upi: upi });
+              if (!ok) { qrBox.innerHTML = '<div class="qr-missing">The QR code could not be generated. The UPI ID is still included in the message.</div>'; return; }
+              cv.toBlob(function (blob) { if (blob) file = new File([blob], 'pay-' + String(c.full_name).toLowerCase().replace(/[^a-z0-9]+/g, '-') + '.png', { type: 'image/png' }); });
+              shareBtn.textContent = canShare ? '📤 Share QR image + message' : '⬇ Download QR image';
+              shareBtn.classList.remove('hidden');
+            } else if (!upi) {
+              qrBox.innerHTML = '<div class="qr-missing">Add your UPI ID in <a href="#/settings" data-close>Settings</a> to include a payment QR.</div>';
+            } else {
+              qrBox.innerHTML = '';
+            }
+          }
+          function markSent() {
+            markReminded(c.customer_id); sent = true;
+            if (opts.onSent) opts.onSent();
+            var nx = $('#remNext', body);
+            if (nx) nx.textContent = i + 1 < list.length ? 'Next customer →' : 'Done';
+            nx && nx.classList.add('primary');
+          }
+          amtEl.oninput = refresh;
+          msgEl.oninput = function () { dirty = true; };
+          $('#remWa', body).onclick = function () {
+            var msg = msgEl.value.trim();
+            if (!msg) return toast('The message is empty.', 'error');
+            window.open('https://wa.me/91' + c.mobile + '?text=' + encodeURIComponent(msg), '_blank', 'noopener');
+            markSent();
+          };
+          shareBtn.onclick = function () {
+            if (!file) return toast('The QR is still getting ready — try again in a second.', 'error');
+            var msg = msgEl.value.trim();
+            if (canShare) {
+              navigator.share({ files: [file], text: msg }).then(markSent).catch(function (e) {
+                if (e && e.name === 'AbortError') return;
+                downloadBlob(file, file.name); toast('Sharing failed, so the QR image was downloaded instead.', 'error');
+              });
+            } else { downloadBlob(file, file.name); toast('QR image downloaded. Attach it in the WhatsApp chat.', 'success'); }
+          };
+          $('#remCopy', body).onclick = function () { copyText(msgEl.value).then(function () { toast('Message copied.', 'success'); }, function () { toast('Could not copy.', 'error'); }); };
+          var nxt = $('#remNext', body);
+          if (nxt) nxt.onclick = function () { if (i + 1 < list.length) { i++; show(); var mdl = b.closest('.modal'); if (mdl) mdl.scrollTop = 0; } else close(); };
+          refresh();
+        }
+        show();
+      }
+    });
+  }
+
+  function openQrPreview() {
+    var upi = state.stall.upi_id;
+    if (!upi) return toast('Save your UPI ID first.', 'error');
+    var file = null;
+    openModal({
+      title: 'Your payment QR',
+      html: '<div class="qr-box"><canvas id="pvQr" role="img" aria-label="UPI payment QR code"></canvas></div><p class="hint">Scan it with your own phone’s UPI app to check it points to the right account. Reminders add the amount automatically.</p><div class="form-actions"><button class="btn" id="pvDl">⬇ Download</button></div>',
+      onMount: function (b) {
+        var cv = $('#pvQr', b);
+        if (!drawPayCard(cv, upiLink(upi, state.stall.name, 0, ''), { stall: state.stall.name, amount: 0, upi: upi })) { $('.qr-box', b).innerHTML = '<div class="qr-missing">The QR library could not load.</div>'; return; }
+        cv.toBlob(function (blob) { file = blob; });
+        $('#pvDl', b).onclick = function () { if (file) downloadBlob(file, 'payment-qr.png'); };
+      }
+    });
+  }
+
+  /* ------------------------------------------------------------------ */
   /* Shell & router                                                      */
   /* ------------------------------------------------------------------ */
+  function bnav(n) { return '<a href="#/' + n.id + '" data-nav="' + n.id + '"><span class="ico">' + n.icon + '</span><span class="lbl">' + n.label + '</span></a>'; }
+
   function renderShell() {
     var owner = isOwner();
     var nav = owner ? OWNER_NAV : CUSTOMER_NAV;
     var bottom = nav.filter(function (n) { return n.bottom; });
-    var hasMore = owner;
+    var bottomHTML = owner
+      ? bottom.slice(0, 2).map(bnav).join('') +
+        '<a href="#/entry" class="fab" data-fab data-nav="entry" aria-label="New entry"><span class="fab-ico">＋</span><span class="lbl">Entry</span></a>' +
+        bottom.slice(2).map(bnav).join('') +
+        '<button type="button" id="moreBtn"><span class="ico">⋯</span><span class="lbl">More</span></button>'
+      : bottom.map(bnav).join('');
     $('#app').innerHTML =
       '<div class="shell ' + (owner ? 'owner' : 'customer') + '">' +
       '<aside class="sidebar"><div class="brand">☕ <span>Chai Khata</span></div><div class="stall-name">' + esc(state.stall.name) + '</div>' +
-      '<nav>' + nav.map(function (n) { return '<a href="#/' + n.id + '" class="nav-link" data-nav="' + n.id + '"><span class="ico">' + n.icon + '</span>' + n.label + '</a>'; }).join('') + '</nav>' +
+      '<nav>' + nav.map(function (n) { return '<a href="#/' + n.id + '" class="nav-link" data-nav="' + n.id + '"' + (n.fab ? ' data-fab' : '') + '><span class="ico">' + n.icon + '</span>' + esc(n.title || n.label) + '</a>'; }).join('') + '</nav>' +
       '<div class="side-foot"><div class="who">' + esc(state.profile.full_name) + '<small>' + (owner ? 'Owner' : 'Customer') + '</small></div>' +
       '<button class="btn ghost light" id="logoutSide">Sign out</button></div></aside>' +
       '<div class="main"><header class="topbar"><div class="brand-sm">☕ Chai Khata</div><h1 id="pageTitle"></h1>' +
-      (owner ? '' : '<button class="icon-btn bell" id="bellBtn" title="Notifications" aria-label="Notifications">🔔<span class="bell-badge hidden" id="bellBadge">0</span></button>') +
-      '<button class="icon-btn" id="logoutTop" title="Sign out" aria-label="Sign out">⎋</button></header>' +
-      '<main id="view" class="view" tabindex="-1"></main></div>' +
-      '<nav class="bottom-nav" aria-label="Main">' +
-      bottom.map(function (n) { return '<a href="#/' + n.id + '" data-nav="' + n.id + '"><span class="ico">' + n.icon + '</span>' + n.label + '</a>'; }).join('') +
-      (hasMore ? '<button id="moreBtn"><span class="ico">⋯</span>More</button>' : '') + '</nav></div>';
+      (owner ? '<a class="btn primary sm topbar-cta" href="#/entry" data-fab>＋ New entry</a>'
+             : '<button class="icon-btn bell" id="bellBtn" title="Notifications" aria-label="Notifications">🔔<span class="bell-badge hidden" id="bellBadge">0</span></button>') +
+      '</header><main id="view" class="view" tabindex="-1"></main></div>' +
+      '<nav class="bottom-nav' + (owner ? ' has-fab' : '') + '" aria-label="Main">' + bottomHTML + '</nav></div>';
     $('#logoutSide').onclick = signOut;
-    $('#logoutTop').onclick = signOut;
     if (!owner) { $('#bellBtn').onclick = openNotifications; updateBell(); startNotifications(); }
     var more = $('#moreBtn');
     if (more) more.onclick = function () {
-      var rest = OWNER_NAV.filter(function (n) { return !n.bottom; });
+      var rest = OWNER_NAV.filter(function (n) { return !n.bottom && !n.fab; });
       openModal({
-        title: 'More',
-        html: '<div class="ledger">' + rest.map(function (n) { return '<a class="btn block" href="#/' + n.id + '" data-close>' + n.icon + ' ' + n.label + '</a>'; }).join('') +
-          '<button class="btn block danger" id="moreOut">Sign out</button></div>',
+        title: 'Menu',
+        html: '<div class="tile-grid">' + rest.map(function (n) { return '<a class="tile" href="#/' + n.id + '" data-close><span class="tile-ico">' + n.icon + '</span>' + esc(n.title || n.label) + '</a>'; }).join('') + '</div>' +
+          '<p class="muted" style="text-align:center;margin:16px 0 10px">Signed in as <b>' + esc(state.profile.full_name) + '</b> · ' + esc(state.stall.name) + '</p><button class="btn block danger" id="moreOut">Sign out</button>',
         onMount: function (b, close) { $('#moreOut', b).onclick = function () { close(); signOut(); }; }
       });
     };
@@ -804,6 +1011,7 @@
     dashboard: { title: 'Dashboard', render: viewDashboard },
     entry: { title: 'New Entry', render: viewEntry },
     customers: { title: 'Customers', render: viewCustomers },
+    dues: { title: 'Dues & Reminders', render: viewDues },
     transactions: { title: 'Transactions', render: viewTransactions },
     products: { title: 'Products', render: viewProducts },
     reports: { title: 'Reports', render: viewReports },
@@ -822,12 +1030,16 @@
     if (!r.name || !views[r.name]) { location.replace('#/' + (isOwner() ? 'dashboard' : 'home')); return; }
     var active = r.name;
     $$('[data-nav]').forEach(function (a) { a.classList.toggle('active', a.dataset.nav === active); if (a.dataset.nav === active) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
+    var more = $('#moreBtn');
+    if (more) more.classList.toggle('active', !OWNER_NAV.some(function (n) { return (n.bottom || n.fab) && n.id === active; }));
     var v = views[r.name];
     $('#pageTitle').textContent = r.name === 'customers' && r.id ? 'Customer Ledger' : v.title;
     document.title = v.title + ' · Chai Khata';
     var token = ++state.renderToken;
     var alive = function () { return token === state.renderToken; };
-    var el = $('#view');
+    // Fresh container each time so event listeners from a previous page never pile up.
+    var old = $('#view'), el = old.cloneNode(false);
+    old.parentNode.replaceChild(el, old);
     el.innerHTML = loadingHTML();
     Promise.resolve().then(function () { return v.render(el, r, alive); }).catch(function (err) {
       if (!alive()) return;
@@ -839,9 +1051,44 @@
     window.scrollTo(0, 0);
   }
 
+  function resetEntry() { entry.customerId = null; entry.cart.clear(); entry.note = ''; entry.done = null; entry.tab = 'purchase'; entry.sigs = {}; entry.ids = {}; }
+  function bindGlobalClicks() {
+    document.addEventListener('click', function (e) {
+      var f = e.target.closest('[data-fab]');
+      if (!f) return;
+      e.preventDefault();
+      resetEntry();
+      closeAllModals();
+      if (location.hash === '#/entry') route(); else location.hash = '#/entry';
+    });
+    // Browser back/forward or any navigation closes open dialogs.
+    window.addEventListener('hashchange', closeAllModals);
+  }
+
+  // Shared handler for the action buttons on customer rows (bill / payment / remind / edit).
+  function bindRowActions(root, onChanged) {
+    root.addEventListener('click', function (e) {
+      var t = e.target.closest('[data-bill],[data-pay],[data-remind],[data-edit]');
+      if (!t) return;
+      var id = t.getAttribute('data-bill') || t.getAttribute('data-pay') || t.getAttribute('data-remind') || t.getAttribute('data-edit');
+      var c = getCustomer(id);
+      if (t.hasAttribute('data-bill')) { entry.tab = 'purchase'; location.hash = '#/entry/' + id; }
+      else if (t.hasAttribute('data-pay')) { entry.tab = 'payment'; location.hash = '#/entry/' + id; }
+      else if (t.hasAttribute('data-remind')) { if (c) openReminder([c], 0, { onSent: onChanged }); }
+      else if (t.hasAttribute('data-edit')) { if (c) openCustomerForm(c, onChanged); }
+    });
+  }
+
   /* ------------------------------------------------------------------ */
   /* OWNER: Dashboard                                                    */
   /* ------------------------------------------------------------------ */
+  function mrowTx(t) {
+    var e = Number(t.balance_effect), side = e > 0 ? 'debit' : 'credit';
+    return '<a class="mrow' + (t.is_reversed ? ' reversed' : '') + '" href="#/customers/' + t.customer_id + '"><span class="mrow-ico ' + side + '">' + notifIcon(t) + '</span>' +
+      '<span class="mrow-main"><b>' + esc(t.customer ? t.customer.full_name : '') + '</b><small>' + esc(txLabel(t)) + ' · ' + fmtDate(t.created_at) + ', ' + fmtTime(t.created_at) + '</small></span>' +
+      '<b class="amt ' + side + '">' + (e > 0 ? '+' : '−') + money(Math.abs(e)) + '</b></a>';
+  }
+
   function viewDashboard(el, r, alive) {
     var today = todayISO();
     return Promise.all([
@@ -851,156 +1098,311 @@
     ]).then(function (res) {
       if (!alive()) return;
       var customers = res[0], t = res[1][0] || { sales: 0, collections: 0, bills: 0 }, recent = res[2];
-      var dues = customers.filter(function (c) { return Number(c.balance) > 0; }).sort(function (a, b) { return b.balance - a.balance; });
+      var dues = customers.filter(function (c) { return c.is_active && Number(c.balance) > 0; }).sort(function (a, b) { return b.balance - a.balance; });
       var outstanding = dues.reduce(function (s, c) { return s + Number(c.balance); }, 0);
-      el.innerHTML =
-        '<div class="stats">' +
-        '<div class="stat accent"><div class="label">Today’s sales</div><div class="value">' + money(t.sales) + '</div><div class="sub">' + (t.bills || 0) + ' bill(s)</div></div>' +
-        '<div class="stat"><div class="label">Collected today</div><div class="value">' + money(t.collections) + '</div></div>' +
-        '<div class="stat"><div class="label">Total outstanding</div><div class="value">' + money(outstanding) + '</div><div class="sub">' + dues.length + ' customer(s) with dues</div></div>' +
-        '<div class="stat"><div class="label">Customers</div><div class="value">' + customers.length + '</div><div class="sub">' + customers.filter(function (c) { return c.is_active; }).length + ' active</div></div></div>' +
-        '<div class="toolbar"><a class="btn primary" href="#/entry">➕ New entry</a><a class="btn" href="#/customers">👥 Customers</a><a class="btn" href="#/reports">📊 Reports</a></div>' +
-        '<div class="two-col"><section class="card"><h2 class="card-title">Recent activity <a class="btn sm ghost" href="#/transactions">View all</a></h2>' +
-        (recent.length ? '<div class="table-wrap"><table class="table stack"><thead><tr><th>When</th><th>Customer</th><th>Type</th><th class="num">Amount</th></tr></thead><tbody>' +
-          recent.map(function (x) {
-            var e = Number(x.balance_effect);
-            return '<tr class="' + (x.is_reversed ? 'reversed' : '') + '"><td data-label="When">' + fmtDate(x.created_at) + ' ' + fmtTime(x.created_at) + '</td><td data-label="Customer">' + esc(x.customer ? x.customer.full_name : '') + '</td><td data-label="Type">' + esc(txLabel(x)) + '</td><td data-label="Amount" class="num"><span class="amt ' + (e > 0 ? 'debit' : 'credit') + '">' + money(Math.abs(e)) + '</span></td></tr>';
-          }).join('') + '</tbody></table></div>' : emptyHTML('🧾', 'No transactions yet', 'Record your first purchase to get started.', '<a class="btn primary" href="#/entry">New entry</a>')) +
-        '</section><section class="card"><h2 class="card-title">Top dues</h2>' +
-        (dues.length ? '<div class="ledger">' + dues.slice(0, 6).map(function (c) {
-          return '<a class="l-item" style="text-decoration:none;color:inherit" href="#/customers/' + c.customer_id + '"><div class="l-head"><div><div class="l-title">' + esc(c.full_name) + '</div><div class="l-when">' + esc(c.mobile) + '</div></div><div class="l-amt debit">' + money(c.balance) + '</div></div></a>';
-        }).join('') + '</div>' : emptyHTML('🎉', 'No dues', 'All customers are settled up.')) + '</section></div>';
+      function draw() {
+        el.innerHTML =
+          '<div class="greet"><h2>Namaste, ' + esc(firstName(state.profile.full_name)) + ' 👋</h2><p class="muted">' + fmtDate(Date.now()) + ' · ' + esc(state.stall.name) + '</p></div>' +
+          (!state.stall.upi_id ? '<a class="banner warn" href="#/settings">⚙️ Add your UPI ID in Settings so WhatsApp reminders can include a payment QR →</a>' : '') +
+          '<div class="stats">' +
+          '<div class="stat accent"><div class="label">Today’s sales</div><div class="value">' + money(t.sales) + '</div><div class="sub">' + (t.bills || 0) + ' bill(s)</div></div>' +
+          '<div class="stat"><div class="label">Collected today</div><div class="value">' + money(t.collections) + '</div></div>' +
+          '<div class="stat"><div class="label">Total outstanding</div><div class="value">' + money(outstanding) + '</div><div class="sub">' + dues.length + ' customer(s)</div></div>' +
+          '<div class="stat"><div class="label">Customers</div><div class="value">' + customers.filter(function (c) { return c.is_active; }).length + '</div><div class="sub">active</div></div></div>' +
+          '<div class="quick-tiles"><a class="qtile primary" href="#/entry" data-fab><span>＋</span>New entry</a><button class="qtile" id="qAdd"><span>👤</span>Add customer</button><a class="qtile" href="#/dues"><span>💬</span>Send reminders</a></div>' +
+          '<div class="two-col"><section class="card"><h2 class="card-title">Needs attention <a class="btn sm ghost" href="#/dues">All dues</a></h2>' +
+          (dues.length ? '<div class="mlist">' + dues.slice(0, 5).map(function (c) {
+            var ra = remindedAt(c.customer_id);
+            return '<div class="mrow">' + avatarHTML(c.full_name) + '<a class="mrow-main" href="#/customers/' + c.customer_id + '"><b>' + esc(c.full_name) + '</b><small>' + (ra ? 'Reminded ' + agoText(ra) : 'Never reminded') + '</small></a>' +
+              '<b class="due">' + money(c.balance) + '</b><button class="btn sm wa icon" data-remind="' + c.customer_id + '" aria-label="Remind ' + esc(c.full_name) + ' on WhatsApp">💬</button></div>';
+          }).join('') + '</div>' : emptyHTML('🎉', 'No dues', 'All customers are settled up.')) + '</section>' +
+          '<section class="card"><h2 class="card-title">Recent activity <a class="btn sm ghost" href="#/transactions">View all</a></h2>' +
+          (recent.length ? '<div class="mlist">' + recent.map(mrowTx).join('') + '</div>' : emptyHTML('🧾', 'No transactions yet', 'Record your first purchase to get started.', '<a class="btn primary" href="#/entry" data-fab>New entry</a>')) + '</section></div>';
+        $('#qAdd', el).onclick = function () { openCustomerForm(null, function () { loadCustomers().then(function () { if (alive()) route(); }); }); };
+      }
+      bindRowActions(el, function () { if (alive()) draw(); });
+      draw();
     });
   }
 
   /* ------------------------------------------------------------------ */
-  /* OWNER: New entry (purchase / payment / adjustment)                  */
+  /* OWNER: New entry                                                    */
   /* ------------------------------------------------------------------ */
   function requestIdFor(kind, sig) {
     if (entry.sigs[kind] !== sig || !entry.ids[kind]) { entry.sigs[kind] = sig; entry.ids[kind] = uuid(); }
     return entry.ids[kind];
   }
   function clearRequest(kind) { entry.sigs[kind] = null; entry.ids[kind] = null; }
+  function setEntryHash(id) { try { history.replaceState(null, '', id ? '#/entry/' + id : '#/entry'); } catch (e) { /* ignore */ } }
+
+  function comboRows(term) {
+    var t = term.trim().toLowerCase(), rec = lsGet(ukey('recent'), []);
+    var rows = state.customers.filter(function (c) {
+      return c.is_active && (!t || [c.full_name, c.mobile, c.username].some(function (v) { return (v || '').toLowerCase().indexOf(t) !== -1; }));
+    });
+    function rank(c) { var i = rec.indexOf(c.customer_id); return i < 0 ? 99 : i; }
+    rows.sort(function (a, b) {
+      if (t) { var sa = a.full_name.toLowerCase().indexOf(t) === 0 ? 0 : 1, sb2 = b.full_name.toLowerCase().indexOf(t) === 0 ? 0 : 1; if (sa !== sb2) return sa - sb2; }
+      return rank(a) - rank(b) || a.full_name.localeCompare(b.full_name);
+    });
+    return rows;
+  }
 
   function viewEntry(el, r, alive) {
     return Promise.all([loadCustomers(), loadProducts()]).then(function () {
       if (!alive()) return;
-      if (r.id && getCustomer(r.id)) entry.customerId = r.id;
+      if (r.id && getCustomer(r.id)) {
+        if (entry.customerId !== r.id) { entry.cart.clear(); entry.note = ''; entry.done = null; }
+        entry.customerId = r.id;
+      }
       if (entry.customerId && !getCustomer(entry.customerId)) entry.customerId = null;
-      el.innerHTML = '<div class="entry-grid"><section class="card"><h2 class="card-title">1 · Customer</h2><div id="pickerBox"></div></section>' +
-        '<section class="card"><h2 class="card-title">2 · Entry</h2><div class="tabs" role="tablist">' +
-        '<button data-tab="purchase">Purchase</button><button data-tab="payment">Payment</button><button data-tab="adjustment">Adjustment</button></div><div id="entryBody"></div></section></div>';
-      $$('[data-tab]', el).forEach(function (b) { b.onclick = function () { entry.tab = b.dataset.tab; renderEntryBody(); }; });
-      renderPicker(); renderEntryBody();
+      if (!entry.method) entry.method = lsGet(ukey('method'), 'Cash');
+      var c0 = getCustomer(entry.customerId);
+      el.innerHTML = '<div class="entry"><section class="card cust-pick"><div class="combo">' +
+        '<span class="combo-ico" aria-hidden="true">🔍</span>' +
+        '<input id="custSearch" class="combo-input" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" role="combobox" aria-expanded="false" aria-controls="comboList" aria-label="Customer" placeholder="Search customer by name or mobile…" value="' + esc(c0 ? c0.full_name : '') + '">' +
+        '<button type="button" class="combo-clear' + (c0 ? '' : ' hidden') + '" id="comboClear" aria-label="Clear customer">✕</button>' +
+        '<ul class="combo-list hidden" id="comboList" role="listbox"></ul></div>' +
+        '<div id="recentChips"></div><div id="custSummary"></div></section><div id="entryArea"></div></div>';
+      bindCombo(el);
+      bindRowActions(el, function () { loadCustomers().then(function () { if (alive()) { renderSummary(); renderEntryArea(); } }); });
+      $('#entryArea', el).addEventListener('click', function (e) {
+        var tab = e.target.closest('[data-tab]'), pick = e.target.closest('[data-pick]'), add = e.target.closest('[data-addcust]');
+        if (tab) { entry.tab = tab.dataset.tab; $$('[data-tab]', el).forEach(function (b) { var on = b.dataset.tab === entry.tab; b.classList.toggle('active', on); b.setAttribute('aria-selected', on ? 'true' : 'false'); }); renderEntryBody(); }
+        else if (pick) selectCustomer(pick.dataset.pick);
+        else if (add) addCustomerFromEntry('');
+      });
+      $('#recentChips', el).addEventListener('click', function (e) { var p = e.target.closest('[data-pick]'); if (p) selectCustomer(p.dataset.pick); });
+      renderSummary(); renderEntryArea();
+      if (!entry.customerId && !isTouch()) $('#custSearch', el).focus();
     });
   }
 
-  function renderPicker() {
-    var box = $('#pickerBox'); if (!box) return;
+  function addCustomerFromEntry(typed) {
+    var t = String(typed || '').trim(), digits = t.replace(/\D/g, '');
+    var prefill = digits.length >= 6 && digits.length === t.replace(/[\s+\-]/g, '').length ? { mobile: digits } : { name: t };
+    openCustomerForm(null, function (res) {
+      loadCustomers().then(function () { if (res && res.customer_id && getCustomer(res.customer_id)) selectCustomer(res.customer_id); });
+    }, prefill);
+  }
+
+  function bindCombo(el) {
+    var input = $('#custSearch', el), list = $('#comboList', el), clear = $('#comboClear', el);
+    var typed = false, active = -1, rows = [], closeT = null;
+    function setOpen(open) { list.classList.toggle('hidden', !open); input.setAttribute('aria-expanded', open ? 'true' : 'false'); }
+    function restore() { var c = getCustomer(entry.customerId); input.value = c ? c.full_name : ''; typed = false; clear.classList.toggle('hidden', !c); }
+    function mark() {
+      $$('li[data-id]', list).forEach(function (li, i) { li.classList.toggle('active', i === active); li.setAttribute('aria-selected', i === active ? 'true' : 'false'); if (i === active) li.scrollIntoView({ block: 'nearest' }); });
+    }
+    function draw() {
+      rows = comboRows(typed ? input.value : '').slice(0, 30);
+      active = rows.length ? 0 : -1;
+      list.innerHTML = rows.length ? rows.map(function (c) {
+        return '<li role="option" data-id="' + c.customer_id + '">' + avatarHTML(c.full_name) + '<span class="combo-name"><b>' + esc(c.full_name) + '</b><small>' + esc(c.mobile) + '</small></span><b class="' + balClass(c.balance) + '">' + money(Math.abs(c.balance)) + '</b></li>';
+      }).join('') : '<li class="combo-empty">No matching customer.' + (typed && input.value.trim() ? ' <button type="button" class="link-btn" data-add>Add “' + esc(input.value.trim()) + '” as a new customer</button>' : '') + '</li>';
+      mark();
+    }
+    input.addEventListener('focus', function () {
+      clearTimeout(closeT);
+      typed = false;
+      if (entry.customerId) { setTimeout(function () { try { input.select(); } catch (e) { /* ignore */ } }, 0); draw(); setOpen(true); }
+    });
+    input.addEventListener('input', function () { typed = true; clear.classList.toggle('hidden', !input.value); draw(); setOpen(true); });
+    input.addEventListener('keydown', function (e) {
+      var open = !list.classList.contains('hidden');
+      if (e.key === 'ArrowDown') { e.preventDefault(); if (!open) { draw(); setOpen(true); } else if (active < rows.length - 1) { active++; mark(); } }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); if (open && active > 0) { active--; mark(); } }
+      else if (e.key === 'Enter') { if (open && rows[active]) { e.preventDefault(); selectCustomer(rows[active].customer_id); } }
+      else if (e.key === 'Escape') { setOpen(false); restore(); }
+    });
+    input.addEventListener('blur', function () { closeT = setTimeout(function () { setOpen(false); restore(); }, 180); });
+    list.addEventListener('pointerdown', function (e) { e.preventDefault(); });
+    list.addEventListener('click', function (e) {
+      if (e.target.closest('[data-add]')) { var v = input.value; setOpen(false); addCustomerFromEntry(v); return; }
+      var li = e.target.closest('[data-id]'); if (li) selectCustomer(li.dataset.id);
+    });
+    clear.addEventListener('click', function () {
+      entry.customerId = null; entry.done = null; setEntryHash(null);
+      input.value = ''; typed = false; clear.classList.add('hidden'); setOpen(false);
+      renderSummary(); renderEntryArea(); input.focus();
+    });
+  }
+
+  function selectCustomer(id) {
+    var c = getCustomer(id); if (!c) return;
+    if (entry.customerId !== id) entry.done = null;
+    entry.customerId = id; pushRecent(id);
+    var input = $('#custSearch'), cl = $('#comboClear'), ls = $('#comboList');
+    if (input) { input.value = c.full_name; input.blur(); }
+    if (cl) cl.classList.remove('hidden');
+    if (ls) ls.classList.add('hidden');
+    setEntryHash(id); renderSummary(); renderEntryArea();
+    window.scrollTo(0, 0);
+  }
+
+  function renderSummary() {
+    var c = getCustomer(entry.customerId), box = $('#custSummary'), chips = $('#recentChips');
+    if (!box || !chips) return;
+    if (!c) { box.innerHTML = ''; chips.innerHTML = ''; return; }
+    var due = Number(c.balance) > 0;
+    box.innerHTML = '<div class="sel-bar">' + avatarHTML(c.full_name) + '<div class="sel-main"><b>' + esc(c.full_name) + '</b><small>' + esc(c.mobile) + (c.last_activity ? ' · last ' + fmtDate(c.last_activity) : '') + '</small></div>' +
+      '<div class="sel-bal ' + balClass(c.balance) + '">' + money(Math.abs(c.balance)) + '<small>' + balLabel(c.balance) + '</small></div></div>' +
+      '<div class="sel-actions">' + (due ? '<button class="btn sm wa" data-remind="' + c.customer_id + '">💬 Remind</button>' : '') + '<a class="btn sm ghost" href="#/customers/' + c.customer_id + '">📒 Ledger</a>' +
+      (c.is_active ? '' : '<span class="badge red">Inactive — cannot be billed</span>') + '</div>';
+    var rec = getRecents().filter(function (id) { return id !== c.customer_id; }).slice(0, 6);
+    chips.innerHTML = rec.length ? '<div class="chips"><span class="chips-label">Switch to</span>' + rec.map(function (id) {
+      var x = getCustomer(id);
+      return '<button type="button" class="chip" data-pick="' + id + '">' + esc(firstName(x.full_name)) + (Number(x.balance) > 0 ? ' <small class="due">' + money(x.balance).replace('.00', '') + '</small>' : '') + '</button>';
+    }).join('') + '</div>' : '';
+  }
+
+  function quickListHTML() {
+    if (!state.customers.length) return emptyHTML('👥', 'No customers yet', 'Add your first regular customer to start their khata.', '<button class="btn primary" data-addcust>＋ Add customer</button>');
+    var seen = {}, rows = [];
+    getRecents().concat(state.customers.filter(function (c) { return c.is_active && Number(c.balance) > 0; }).sort(function (a, b) { return b.balance - a.balance; }).map(function (c) { return c.customer_id; }))
+      .concat(state.customers.filter(function (c) { return c.is_active; }).map(function (c) { return c.customer_id; })).forEach(function (id) {
+        if (!seen[id] && getCustomer(id) && getCustomer(id).is_active && rows.length < 10) { seen[id] = 1; rows.push(getCustomer(id)); }
+      });
+    return '<h3 class="sec-title">Tap a customer to start</h3><div class="mlist card-list">' + rows.map(function (c) {
+      return '<button type="button" class="mrow tap" data-pick="' + c.customer_id + '">' + avatarHTML(c.full_name) + '<span class="mrow-main"><b>' + esc(c.full_name) + '</b><small>' + esc(c.mobile) + '</small></span><b class="' + balClass(c.balance) + '">' + money(Math.abs(c.balance)) + '</b></button>';
+    }).join('') + '</div><p class="hint">Not listed? Type a name or number above, or <button type="button" class="link-btn" data-addcust>add a new customer</button>.</p>';
+  }
+
+  function doneHTML(c) {
+    var d = entry.done, bal = Number(c.balance);
+    return '<section class="card done-card"><div class="done-tick" aria-hidden="true">✓</div><h3>' + esc(d.title) + '</h3><p>' + esc(d.text) + '</p>' +
+      '<p class="done-bal">New balance <b class="' + balClass(bal) + '">' + money(Math.abs(bal)) + '</b> <small>' + balLabel(bal) + '</small></p>' +
+      '<div class="done-actions"><button type="button" class="btn primary block" id="doneNext">👤 Next customer</button>' +
+      '<button type="button" class="btn block" id="doneAgain">＋ Another entry for ' + esc(firstName(c.full_name)) + '</button>' +
+      '<button type="button" class="btn wa block" id="doneWa">💬 Send WhatsApp update</button></div></section>';
+  }
+
+  function renderEntryArea() {
+    var area = $('#entryArea'); if (!area) return;
     var c = getCustomer(entry.customerId);
-    if (c) {
-      box.innerHTML = '<div class="picked"><div><strong>' + esc(c.full_name) + '</strong><div class="muted">' + esc(c.mobile) + '</div></div>' +
-        '<div class="picked-bal ' + balClass(c.balance) + '">' + money(Math.abs(c.balance)) + '<small>' + balLabel(c.balance) + '</small></div></div>' +
-        '<div class="toolbar" style="margin:12px 0 0"><button class="btn sm" id="changeCust">Change customer</button><a class="btn sm ghost" href="#/customers/' + c.customer_id + '">View ledger</a></div>';
-      $('#changeCust').onclick = function () { entry.customerId = null; entry.cart.clear(); renderPicker(); renderEntryBody(); };
+    if (!c) { area.innerHTML = quickListHTML(); return; }
+    if (entry.done) {
+      area.innerHTML = doneHTML(c);
+      $('#doneNext', area).onclick = function () {
+        resetEntry(); setEntryHash(null);
+        var inp = $('#custSearch'); if (inp) { inp.value = ''; if (!isTouch()) inp.focus(); }
+        var cl = $('#comboClear'); if (cl) cl.classList.add('hidden');
+        renderSummary(); renderEntryArea(); window.scrollTo(0, 0);
+      };
+      $('#doneAgain', area).onclick = function () { entry.done = null; renderEntryArea(); };
+      $('#doneWa', area).onclick = function () { openReminder([c], 0, { lead: entry.done.lead }); };
       return;
     }
-    box.innerHTML = '<input type="search" id="custSearch" class="input" placeholder="Search name or mobile…" autocomplete="off" aria-label="Search customers"><ul id="custResults" class="results"></ul>';
-    var input = $('#custSearch'), list = $('#custResults');
-    function draw() {
-      var term = input.value.trim().toLowerCase();
-      var rows = state.customers.filter(function (c) {
-        return c.is_active && (!term || [c.full_name, c.mobile, c.username].some(function (v) { return (v || '').toLowerCase().indexOf(term) !== -1; }));
-      }).slice(0, 40);
-      list.innerHTML = rows.length ? rows.map(function (c) {
-        return '<li><button type="button" data-id="' + c.customer_id + '"><span>' + esc(c.full_name) + '<small class="muted">' + esc(c.mobile) + '</small></span><span class="' + balClass(c.balance) + '">' + money(c.balance) + '</span></button></li>';
-      }).join('') : '<li class="muted pad">No matching active customers. <a href="#/customers">Add a customer</a></li>';
-    }
-    input.addEventListener('input', draw);
-    list.addEventListener('click', function (e) {
-      var b = e.target.closest('button[data-id]'); if (!b) return;
-      entry.customerId = b.dataset.id; renderPicker(); renderEntryBody();
-    });
-    draw();
+    area.innerHTML = '<div class="tabs" role="tablist">' + [['purchase', '🧾 Purchase'], ['payment', '💰 Payment'], ['adjustment', '✏️ Adjust']].map(function (t) {
+      return '<button type="button" role="tab" data-tab="' + t[0] + '" class="' + (entry.tab === t[0] ? 'active' : '') + '" aria-selected="' + (entry.tab === t[0]) + '">' + t[1] + '</button>';
+    }).join('') + '</div><div id="entryBody" class="entry-body"></div>';
+    renderEntryBody();
   }
 
   function renderEntryBody() {
     var body = $('#entryBody'); if (!body) return;
-    $$('[data-tab]').forEach(function (b) { b.classList.toggle('active', b.dataset.tab === entry.tab); });
-    var c = getCustomer(entry.customerId);
-    if (!c) { body.innerHTML = emptyHTML('👈', 'Pick a customer first', 'Search by name or mobile number to begin.'); return; }
+    var c = getCustomer(entry.customerId); if (!c) return;
     if (entry.tab === 'purchase') renderPurchaseForm(body);
     else if (entry.tab === 'payment') renderPaymentForm(body, c);
     else renderAdjustmentForm(body, c);
   }
 
   function refreshAfterEntry() {
-    return loadCustomers().then(function () { renderPicker(); renderEntryBody(); });
+    return loadCustomers().then(function () { renderSummary(); renderEntryArea(); window.scrollTo(0, 0); });
+  }
+
+  function cartLines() {
+    var lines = [];
+    entry.cart.forEach(function (qty, pid) { var p = getProduct(pid); if (p && p.is_active) lines.push({ p: p, qty: qty }); });
+    return lines;
   }
 
   function renderPurchaseForm(body) {
     var prods = state.products.filter(function (p) { return p.is_active; });
     if (!prods.length) { body.innerHTML = emptyHTML('☕', 'No products yet', 'Add tea, snacks and more before recording purchases.', '<a class="btn primary" href="#/products">Add products</a>'); return; }
-    body.innerHTML = '<div class="product-grid">' + prods.map(function (p) {
-      return '<button type="button" class="prod" data-pid="' + p.id + '"><span class="prod-name">' + esc(p.name) + '</span><span class="prod-price">' + money(p.price) + ' / ' + esc(p.unit) + '</span><span class="prod-badge"></span></button>';
-    }).join('') + '</div><div id="cartBox"></div>';
-    $('.product-grid', body).onclick = function (e) {
-      var b = e.target.closest('[data-pid]'); if (!b) return;
-      entry.cart.set(b.dataset.pid, round2((entry.cart.get(b.dataset.pid) || 0) + 1));
-      renderCart();
-    };
+    var use = lsGet(ukey('produse'), {});
+    prods.sort(function (a, b) { return (use[b.id] || 0) - (use[a.id] || 0) || a.name.localeCompare(b.name); });
+    body.innerHTML = (prods.length > 8 ? '<div class="field"><input type="search" id="prodFilter" class="input" placeholder="Filter products…" aria-label="Filter products"></div>' : '') +
+      '<div class="product-grid" id="prodGrid">' + prods.map(function (p) {
+        return '<div class="prod" role="button" tabindex="0" data-pid="' + p.id + '" data-name="' + esc(p.name.toLowerCase()) + '"><span class="prod-name">' + esc(p.name) + '</span><span class="prod-price">' + money(p.price) + ' / ' + esc(p.unit) + '</span><span class="prod-badge"></span><button type="button" class="prod-minus" data-minus aria-label="Remove one ' + esc(p.name) + '">−</button></div>';
+      }).join('') + '</div><div id="cartBox"></div><div class="action-bar" id="actionBar"></div>';
+    var grid = $('#prodGrid', body);
+    function add(pid) { entry.cart.set(pid, round2((entry.cart.get(pid) || 0) + 1)); renderCart(); }
+    grid.addEventListener('click', function (e) {
+      var tile = e.target.closest('[data-pid]'); if (!tile) return;
+      if (e.target.closest('[data-minus]')) {
+        var cur = entry.cart.get(tile.dataset.pid) || 0;
+        if (cur - 1 <= 0) entry.cart.delete(tile.dataset.pid); else entry.cart.set(tile.dataset.pid, round2(cur - 1));
+        renderCart(); return;
+      }
+      add(tile.dataset.pid);
+    });
+    grid.addEventListener('keydown', function (e) {
+      if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[data-pid]')) { e.preventDefault(); add(e.target.dataset.pid); }
+    });
+    var f = $('#prodFilter', body);
+    if (f) f.oninput = function () { var t = f.value.trim().toLowerCase(); $$('.prod', grid).forEach(function (n) { n.classList.toggle('hidden', !!t && n.dataset.name.indexOf(t) === -1); }); };
     renderCart();
   }
 
   function renderCart() {
-    var box = $('#cartBox'); if (!box) return;
-    var lines = [];
-    entry.cart.forEach(function (qty, pid) { var p = getProduct(pid); if (p && p.is_active) lines.push({ p: p, qty: qty }); });
+    var box = $('#cartBox'), bar = $('#actionBar'); if (!box || !bar) return;
+    var lines = cartLines();
     var total = lines.reduce(function (s, l) { return s + round2(l.qty * Number(l.p.price)); }, 0);
+    var count = lines.reduce(function (s, l) { return s + l.qty; }, 0);
     $$('.prod').forEach(function (b) {
       var q2 = entry.cart.get(b.dataset.pid);
       b.classList.toggle('in-cart', !!q2);
       $('.prod-badge', b).textContent = q2 ? num(q2) : '';
     });
-    if (!lines.length) { box.innerHTML = '<div class="cart muted" style="text-align:center">Tap products above to add them to the bill.</div>'; return; }
+    if (!lines.length) {
+      box.innerHTML = '';
+      bar.innerHTML = '<div class="ab-info muted">Tap products to build the bill</div><button type="button" class="btn primary" disabled>Record purchase</button>';
+      return;
+    }
     box.innerHTML = '<div class="cart">' + lines.map(function (l) {
       return '<div class="cart-line" data-line="' + l.p.id + '"><div class="name">' + esc(l.p.name) + '<small class="muted">' + money(l.p.price) + ' each</small></div>' +
         '<div class="qty"><button type="button" data-dec aria-label="Decrease">−</button><input type="number" inputmode="decimal" step="0.5" min="0.5" value="' + num(l.qty) + '" aria-label="Quantity"><button type="button" data-inc aria-label="Increase">+</button></div>' +
-        '<div><b>' + money(l.qty * l.p.price) + '</b> <button type="button" class="icon-btn" data-rm aria-label="Remove">🗑</button></div></div>';
-    }).join('') + '<div class="cart-total"><span>Total</span><span>' + money(total) + '</span></div></div>' +
-      '<div class="field" style="margin-top:14px"><label for="entryNote">Note (optional)</label><input id="entryNote" type="text" maxlength="300" value="' + esc(entry.note) + '" placeholder="e.g. for the office group"></div>' +
-      '<button class="btn primary block" id="submitPurchase">Record purchase · ' + money(total) + '</button>';
+        '<div class="line-total"><b>' + money(l.qty * l.p.price) + '</b></div></div>';
+    }).join('') + '</div><div class="field" style="margin-top:12px"><label for="entryNote">Note (optional)</label><input id="entryNote" type="text" maxlength="300" value="' + esc(entry.note) + '" placeholder="e.g. for the office group"></div>';
+    bar.innerHTML = '<div class="ab-info"><span>' + num(count) + ' item' + (count === 1 ? '' : 's') + '</span><b>' + money(total) + '</b></div><button type="button" class="btn ghost sm" id="cartClear">Clear</button><button type="button" class="btn primary" id="submitPurchase">Record purchase</button>';
     box.onclick = function (e) {
       var line = e.target.closest('[data-line]'); if (!line) return;
       var pid = line.dataset.line, cur = entry.cart.get(pid) || 0;
       if (e.target.closest('[data-inc]')) entry.cart.set(pid, round2(cur + 1));
       else if (e.target.closest('[data-dec]')) { if (cur - 1 <= 0) entry.cart.delete(pid); else entry.cart.set(pid, round2(cur - 1)); }
-      else if (e.target.closest('[data-rm]')) entry.cart.delete(pid);
       else return;
       renderCart();
     };
     box.onchange = function (e) {
       var line = e.target.closest('[data-line]'); if (!line || e.target.type !== 'number') return;
       var v = round2(Number(e.target.value));
-      if (!(v > 0) || v > 1000) { if (!(v > 0)) entry.cart.delete(line.dataset.line); else toast('Quantity can be at most 1000.', 'error'); }
+      if (!(v > 0)) entry.cart.delete(line.dataset.line);
+      else if (v > 1000) toast('Quantity can be at most 1000.', 'error');
       else entry.cart.set(line.dataset.line, v);
       renderCart();
     };
     $('#entryNote').oninput = function (e) { entry.note = e.target.value; };
+    $('#cartClear').onclick = function () { entry.cart.clear(); entry.note = ''; renderCart(); };
     $('#submitPurchase').onclick = function (e) { submitPurchase(e.currentTarget); };
   }
 
   function submitPurchase(btn) {
     var c = getCustomer(entry.customerId); if (!c) return;
-    var items = [];
-    entry.cart.forEach(function (quantity, product_id) { items.push({ product_id: product_id, quantity: quantity }); });
-    if (!items.length) return toast('Add at least one product.', 'error');
+    if (!c.is_active) return toast('This customer is inactive. Activate them in Customers first.', 'error');
+    var lines = cartLines();
+    if (!lines.length) return toast('Add at least one product.', 'error');
+    var items = lines.map(function (l) { return { product_id: l.p.id, quantity: l.qty }; });
     var note = entry.note.trim();
     if (note.length > 300) return toast('Note is too long (max 300 characters).', 'error');
+    var total = lines.reduce(function (s, l) { return s + round2(l.qty * Number(l.p.price)); }, 0);
+    var sum = lines.map(function (l) { return l.p.name + ' ×' + num(l.qty); }).join(', ');
     var rid = requestIdFor('purchase', JSON.stringify([c.customer_id, items, note]));
     return withBusy(btn, function () {
       return q(sb.rpc('record_purchase', { p_customer: c.customer_id, p_items: items, p_note: note || null, p_request_id: rid })).then(function () {
+        bumpProducts(items.map(function (i) { return i.product_id; })); pushRecent(c.customer_id);
         entry.cart.clear(); entry.note = ''; clearRequest('purchase');
+        entry.done = { title: 'Purchase recorded', text: money(total) + ' · ' + sum, lead: 'A purchase of ' + money(total) + ' (' + sum + ') was added to your khata on ' + nowStamp() + '.' };
         toast('Purchase recorded for ' + c.full_name + '.', 'success');
         return refreshAfterEntry();
       }).catch(function (err) { handleError(err); });
@@ -1008,31 +1410,33 @@
   }
 
   function renderPaymentForm(body, c) {
-    var due = Number(c.balance);
+    var due = Math.max(round2(Number(c.balance)), 0);
     body.innerHTML = '<form id="payForm" novalidate>' +
       '<div class="field"><label for="payAmt">Amount received (₹)</label><input id="payAmt" class="input big-input" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off"></div>' +
-      (due > 0 ? '<div class="toolbar"><button type="button" class="btn sm" id="payFull">Full due · ' + money(due) + '</button></div>' : '') +
-      '<div class="field"><span class="label">Method</span><div class="seg">' + PAY_METHODS.map(function (m, i) {
-        return '<label><input type="radio" name="payMethod" value="' + m + '"' + (i === 0 ? ' checked' : '') + '><span>' + m + '</span></label>';
+      '<div class="chips quick-amts">' + (due > 0 ? '<button type="button" class="chip strong" data-amt="' + due.toFixed(2) + '">Full due ' + money(due) + '</button>' : '') +
+      [50, 100, 200, 500].map(function (a) { return '<button type="button" class="chip" data-amt="' + a + '">₹' + a + '</button>'; }).join('') + '</div>' +
+      '<div class="field"><span class="label">Method</span><div class="seg">' + PAY_METHODS.map(function (m) {
+        return '<label><input type="radio" name="payMethod" value="' + m + '"' + (entry.method === m ? ' checked' : '') + '><span>' + m + '</span></label>';
       }).join('') + '</div></div>' +
       '<div class="field"><label for="payNote">Note (optional)</label><input id="payNote" type="text" maxlength="300"></div>' +
-      '<div class="error-text" id="payErr" role="alert"></div>' +
-      '<button class="btn primary block" type="submit">Record payment</button></form>';
-    var full = $('#payFull', body); if (full) full.onclick = function () { $('#payAmt', body).value = due.toFixed(2); };
+      '<div class="error-text" id="payErr" role="alert"></div></form>' +
+      '<div class="action-bar"><div class="ab-info muted">Payment from ' + esc(firstName(c.full_name)) + '</div><button type="submit" form="payForm" class="btn primary" id="payGo">Record payment</button></div>';
+    $$('[data-amt]', body).forEach(function (b) { b.onclick = function () { $('#payAmt', body).value = Number(b.dataset.amt).toFixed(2); }; });
+    $$('input[name=payMethod]', body).forEach(function (rb) { rb.onchange = function () { entry.method = rb.value; lsSet(ukey('method'), rb.value); }; });
     $('#payForm', body).onsubmit = function (e) {
       e.preventDefault();
       var err = $('#payErr', body); err.textContent = '';
       var amt = parseAmount($('#payAmt', body).value);
       if (isNaN(amt)) { err.textContent = 'Enter a valid amount (₹0.01 to ₹10,00,000, up to 2 decimals).'; return; }
-      var method = $('input[name=payMethod]:checked', body).value;
-      var note = $('#payNote', body).value.trim();
-      var go = amt > due && due >= 0 ? confirmDialog('This is more than the amount due (' + money(due) + '). The customer will be left with an advance of ' + money(amt - due) + '. Continue?', 'Record payment') : Promise.resolve(true);
+      var method = $('input[name=payMethod]:checked', body).value, note = $('#payNote', body).value.trim();
+      var go = amt > due ? confirmDialog('This is more than the amount due (' + money(due) + '). The customer will be left with an advance of ' + money(amt - due) + '. Continue?', 'Record payment') : Promise.resolve(true);
       go.then(function (ok) {
         if (!ok) return;
         var rid = requestIdFor('payment', JSON.stringify([c.customer_id, amt, method, note]));
-        return withBusy($('button[type=submit]', body), function () {
+        return withBusy($('#payGo', body), function () {
           return q(sb.rpc('record_payment', { p_customer: c.customer_id, p_amount: amt, p_method: method, p_note: note || null, p_request_id: rid })).then(function () {
-            clearRequest('payment');
+            clearRequest('payment'); pushRecent(c.customer_id);
+            entry.done = { title: 'Payment recorded', text: money(amt) + ' received via ' + method, lead: 'We received your payment of ' + money(amt) + ' (' + method + ') on ' + nowStamp() + '. Thank you!' };
             toast(money(amt) + ' received from ' + c.full_name + ' (' + method + ').', 'success');
             return refreshAfterEntry();
           }).catch(function (e2) { if (e2.expired) handleError(e2); else err.textContent = e2.message; });
@@ -1046,8 +1450,8 @@
       '<div class="field"><label for="adjDir">Type</label><select id="adjDir"><option value="debit">Debit — customer owes more</option><option value="credit">Credit — customer owes less</option></select></div>' +
       '<div class="field"><label for="adjAmt">Amount (₹)</label><input id="adjAmt" class="input" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off"></div>' +
       '<div class="field"><label for="adjNote">Reason (required)</label><input id="adjNote" type="text" maxlength="300"></div>' +
-      '<div class="error-text" id="adjErr" role="alert"></div>' +
-      '<button class="btn primary block" type="submit">Record adjustment</button></form>';
+      '<div class="error-text" id="adjErr" role="alert"></div></form>' +
+      '<div class="action-bar"><div class="ab-info muted">Adjustment for ' + esc(firstName(c.full_name)) + '</div><button type="submit" form="adjForm" class="btn primary" id="adjGo">Record adjustment</button></div>';
     $('#adjForm', body).onsubmit = function (e) {
       e.preventDefault();
       var err = $('#adjErr', body); err.textContent = '';
@@ -1055,9 +1459,11 @@
       if (isNaN(amt)) { err.textContent = 'Enter a valid amount (₹0.01 to ₹10,00,000, up to 2 decimals).'; return; }
       if (note.length < 3) { err.textContent = 'Please give a reason (at least 3 characters).'; return; }
       var rid = requestIdFor('adjustment', JSON.stringify([c.customer_id, dir, amt, note]));
-      withBusy($('button[type=submit]', body), function () {
+      withBusy($('#adjGo', body), function () {
         return q(sb.rpc('record_adjustment', { p_customer: c.customer_id, p_direction: dir, p_amount: amt, p_note: note, p_request_id: rid })).then(function () {
-          clearRequest('adjustment'); toast('Adjustment recorded.', 'success'); return refreshAfterEntry();
+          clearRequest('adjustment');
+          entry.done = { title: 'Adjustment recorded', text: (dir === 'debit' ? 'Charge ' : 'Credit ') + money(amt) + ' · ' + note, lead: 'An adjustment of ' + money(amt) + ' (' + (dir === 'debit' ? 'added' : 'credited') + ': ' + note + ') was recorded on ' + nowStamp() + '.' };
+          toast('Adjustment recorded.', 'success'); return refreshAfterEntry();
         }).catch(function (e2) { if (e2.expired) handleError(e2); else err.textContent = e2.message; });
       });
     };
@@ -1066,54 +1472,99 @@
   /* ------------------------------------------------------------------ */
   /* OWNER: Customers                                                    */
   /* ------------------------------------------------------------------ */
+  function crowHTML(c, mode) {
+    var due = Number(c.balance) > 0, ra = remindedAt(c.customer_id);
+    return '<article class="crow' + (mode === 'dues' ? ' dues' : '') + (c.is_active ? '' : ' inactive') + '">' +
+      '<a class="crow-main" href="#/customers/' + c.customer_id + '">' + avatarHTML(c.full_name) +
+      '<span class="crow-name"><b>' + esc(c.full_name) + '</b><small>' + esc(c.mobile) + (c.username ? ' · @' + esc(c.username) : '') + (c.is_active ? '' : ' · inactive') + '</small></span></a>' +
+      '<div class="crow-bal"><b class="' + balClass(c.balance) + '">' + money(Math.abs(c.balance)) + '</b><small>' + balLabel(c.balance) + '</small></div>' +
+      '<div class="crow-last">' + (mode === 'dues' ? (ra ? 'Reminded <br>' + agoText(ra) : 'Never <br>reminded') : (c.last_activity ? 'Last activity <br>' + fmtDate(c.last_activity) : 'No activity yet')) + '</div>' +
+      '<div class="crow-actions">' +
+      (c.is_active ? '<button type="button" class="btn sm" data-bill="' + c.customer_id + '">＋ Bill</button><button type="button" class="btn sm" data-pay="' + c.customer_id + '">₹ Payment</button>' : '') +
+      (due && c.is_active ? '<button type="button" class="btn sm wa" data-remind="' + c.customer_id + '">💬 Remind</button>' : '') +
+      (mode === 'dues' ? '' : '<button type="button" class="btn sm ghost icon" data-edit="' + c.customer_id + '" aria-label="Edit ' + esc(c.full_name) + '">✎</button>') + '</div></article>';
+  }
+
   function viewCustomers(el, r, alive) {
     if (r.id) return viewCustomerLedger(el, r, alive);
     return loadCustomers().then(function () {
       if (!alive()) return;
-      el.innerHTML = '<div class="toolbar"><input type="search" id="custFilter" class="input grow" placeholder="Search by name, mobile or username…" aria-label="Search customers">' +
-        '<select id="custStatus" class="input" aria-label="Filter"><option value="active">Active</option><option value="due">With dues</option><option value="all">All</option><option value="inactive">Inactive</option></select>' +
-        '<button class="btn primary" id="addCust">+ Add customer</button><button class="btn" id="expCust">⬇ Export CSV</button></div><div id="custTable"></div>';
+      var status = lsGet(ukey('cstatus'), 'active');
+      el.innerHTML = '<div class="page-head"><div class="muted" id="custSub"></div><div class="actions"><button type="button" class="btn sm" id="expCust">⬇ CSV</button><button type="button" class="btn primary" id="addCust">＋ Add customer</button></div></div>' +
+        '<input type="search" id="custFilter" class="input" placeholder="Search by name, mobile or username…" aria-label="Search customers">' +
+        '<div class="chip-tabs" id="custStatus" role="tablist">' + [['active', 'Active'], ['due', 'With dues'], ['all', 'All'], ['inactive', 'Inactive']].map(function (s) {
+          return '<button type="button" role="tab" data-st="' + s[0] + '" class="' + (status === s[0] ? 'on' : '') + '">' + s[1] + '</button>';
+        }).join('') + '</div><div id="custList"></div>';
       function filtered() {
-        var term = $('#custFilter', el).value.trim().toLowerCase(), st = $('#custStatus', el).value;
+        var term = $('#custFilter', el).value.trim().toLowerCase();
         return state.customers.filter(function (c) {
-          if (st === 'active' && !c.is_active) return false;
-          if (st === 'inactive' && c.is_active) return false;
-          if (st === 'due' && !(Number(c.balance) > 0)) return false;
+          if (status === 'active' && !c.is_active) return false;
+          if (status === 'inactive' && c.is_active) return false;
+          if (status === 'due' && !(Number(c.balance) > 0)) return false;
           return !term || [c.full_name, c.mobile, c.username].some(function (v) { return (v || '').toLowerCase().indexOf(term) !== -1; });
         });
       }
       function draw() {
-        var rows = filtered(), host = $('#custTable', el);
+        var rows = filtered(), host = $('#custList', el);
+        var owed = rows.reduce(function (s, c) { return s + Math.max(Number(c.balance), 0); }, 0);
+        $('#custSub', el).textContent = rows.length + ' customer' + (rows.length === 1 ? '' : 's') + (owed > 0 ? ' · ' + money(owed) + ' due' : '');
         if (!rows.length) {
           host.innerHTML = state.customers.length ? emptyHTML('🔍', 'No matching customers', 'Try a different search or filter.') :
-            emptyHTML('👥', 'No customers yet', 'Add your first regular customer to start their khata.', '<button class="btn primary" id="addCust2">+ Add customer</button>');
+            emptyHTML('👥', 'No customers yet', 'Add your first regular customer to start their khata.', '<button class="btn primary" id="addCust2">＋ Add customer</button>');
           var a2 = $('#addCust2', host); if (a2) a2.onclick = function () { openCustomerForm(null, refresh); };
           return;
         }
-        host.innerHTML = '<div class="card" style="padding:0"><div class="table-wrap"><table class="table stack"><thead><tr><th>Name</th><th>Mobile</th><th class="num">Balance</th><th>Last activity</th><th>Status</th><th></th></tr></thead><tbody>' +
-          rows.map(function (c) {
-            return '<tr><td data-label="Name"><a href="#/customers/' + c.customer_id + '"><b>' + esc(c.full_name) + '</b></a>' + (c.username ? '<br><small class="muted">@' + esc(c.username) + '</small>' : '') + '</td>' +
-              '<td data-label="Mobile">' + esc(c.mobile) + '</td>' +
-              '<td data-label="Balance" class="num"><span class="' + balClass(c.balance) + '">' + money(Math.abs(c.balance)) + '</span> <small class="muted">' + balLabel(c.balance) + '</small></td>' +
-              '<td data-label="Last activity">' + (c.last_activity ? fmtDate(c.last_activity) : '—') + '</td>' +
-              '<td data-label="Status">' + (c.is_active ? '<span class="badge green">Active</span>' : '<span class="badge gray">Inactive</span>') + (c.must_change_password ? ' <span class="badge orange">New</span>' : '') + '</td>' +
-              '<td class="actions-cell"><div class="actions"><a class="btn sm" href="#/entry/' + c.customer_id + '">Entry</a><a class="btn sm" href="#/customers/' + c.customer_id + '">Ledger</a><button class="btn sm ghost" data-edit="' + c.customer_id + '">Edit</button></div></td></tr>';
-          }).join('') + '</tbody></table></div></div>';
+        host.innerHTML = '<div class="crow-head"><span>Customer</span><span>Balance</span><span>Activity</span><span></span></div><div class="clist">' + rows.map(function (c) { return crowHTML(c); }).join('') + '</div>';
       }
       function refresh() { return loadCustomers().then(function () { if (alive()) draw(); }); }
       $('#custFilter', el).oninput = debounce(draw, 150);
-      $('#custStatus', el).onchange = draw;
+      $('#custStatus', el).addEventListener('click', function (e) {
+        var b = e.target.closest('[data-st]'); if (!b) return;
+        status = b.dataset.st; lsSet(ukey('cstatus'), status);
+        $$('[data-st]', el).forEach(function (x) { x.classList.toggle('on', x === b); });
+        draw();
+      });
       $('#addCust', el).onclick = function () { openCustomerForm(null, refresh); };
       $('#expCust', el).onclick = function () {
         var rows = filtered();
         if (!rows.length) return toast('No customers to export.', 'error');
         downloadCSV('customers-' + todayISO() + '.csv', ['Name', 'Mobile', 'Username', 'Status', 'Total purchases (Rs)', 'Total payments (Rs)', 'Balance (Rs)', 'Last activity'],
-          rows.map(function (c) { return [c.full_name, c.mobile, c.username || '', c.is_active ? 'Active' : 'Inactive', Number(c.total_purchases), Number(c.total_payments), Number(c.balance), c.last_activity ? fmtISODate(new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date(c.last_activity))) : '']; }));
+          rows.map(function (c) { return [c.full_name, c.mobile, c.username || '', c.is_active ? 'Active' : 'Inactive', Number(c.total_purchases), Number(c.total_payments), Number(c.balance), c.last_activity ? fmtISODate(istDateOf(c.last_activity)) : '']; }));
       };
-      el.addEventListener('click', function (e) {
-        var b = e.target.closest('[data-edit]'); if (!b) return;
-        var c = getCustomer(b.dataset.edit); if (c) openCustomerForm(c, refresh);
-      });
+      bindRowActions(el, refresh);
+      draw();
+    });
+  }
+
+  /* ---------- Dues & reminders ---------- */
+  function viewDues(el, r, alive) {
+    return loadCustomers().then(function () {
+      if (!alive()) return;
+      var sort = lsGet(ukey('dsort'), 'high');
+      function dueRows() {
+        var rows = state.customers.filter(function (c) { return c.is_active && Number(c.balance) > 0; });
+        if (sort === 'name') rows.sort(function (a, b) { return a.full_name.localeCompare(b.full_name); });
+        else if (sort === 'quiet') rows.sort(function (a, b) { return String(a.last_activity || '').localeCompare(String(b.last_activity || '')); });
+        else rows.sort(function (a, b) { return b.balance - a.balance; });
+        return rows;
+      }
+      function draw() {
+        var rows = dueRows(), today = todayISO();
+        var total = rows.reduce(function (s, c) { return s + Number(c.balance); }, 0);
+        var pending = rows.filter(function (c) { var ra = remindedAt(c.customer_id); return !ra || istDateOf(ra) !== today; });
+        el.innerHTML = (!state.stall.upi_id ? '<a class="banner warn" href="#/settings">⚙️ Add your UPI ID in Settings to attach a payment QR to reminders →</a>' : '') +
+          '<div class="stats three"><div class="stat accent"><div class="label">Total due</div><div class="value">' + money(total) + '</div></div><div class="stat"><div class="label">Customers</div><div class="value">' + rows.length + '</div></div><div class="stat"><div class="label">Not reminded today</div><div class="value">' + pending.length + '</div></div></div>' +
+          (rows.length ? '<div class="toolbar"><button type="button" class="btn wa" id="startRound"' + (pending.length ? '' : ' disabled') + '>💬 Start reminder round (' + pending.length + ')</button>' +
+            '<select id="dueSort" class="input" aria-label="Sort"><option value="high">Highest due first</option><option value="quiet">Quiet the longest</option><option value="name">Name A–Z</option></select>' +
+            '<button type="button" class="btn sm" id="dueCsv">⬇ CSV</button></div><p class="hint">A round opens each customer’s WhatsApp message one by one — you just press send in WhatsApp.</p>' +
+            '<div class="clist">' + rows.map(function (c) { return crowHTML(c, 'dues'); }).join('') + '</div>' : emptyHTML('🎉', 'No dues', 'Every customer is settled up.'));
+        var sel = $('#dueSort', el); if (sel) { sel.value = sort; sel.onchange = function () { sort = sel.value; lsSet(ukey('dsort'), sort); draw(); }; }
+        var go = $('#startRound', el); if (go) go.onclick = function () { openReminder(pending, 0, { onSent: function () { if (alive()) draw(); } }); };
+        var csv = $('#dueCsv', el); if (csv) csv.onclick = function () {
+          downloadCSV('dues-' + todayISO() + '.csv', ['Customer', 'Mobile', 'Balance due (Rs)', 'Last activity'], rows.map(function (c) { return [c.full_name, c.mobile, Number(c.balance), c.last_activity ? fmtISODate(istDateOf(c.last_activity)) : '']; }));
+        };
+      }
+      bindRowActions(el, function () { if (alive()) draw(); });
       draw();
     });
   }
@@ -1128,22 +1579,22 @@
         (c.username ? '<div class="cred-row"><span>Username</span><b>' + esc(c.username) + '</b></div>' : '') +
         '<div class="cred-row"><span>Password</span><b>' + esc(c.initial_password) + '</b></div></div>' +
         '<p class="hint">Shown only once. The customer must set a new password at first login.</p>' +
-        '<div class="form-actions"><button class="btn" id="copyCred">Copy details</button><a class="btn primary" target="_blank" rel="noopener" href="https://wa.me/91' + esc(c.mobile) + '?text=' + encodeURIComponent(msg) + '">Send on WhatsApp</a></div>',
+        '<div class="form-actions"><button type="button" class="btn" id="copyCred">Copy details</button><a class="btn wa" target="_blank" rel="noopener" href="https://wa.me/91' + esc(c.mobile) + '?text=' + encodeURIComponent(msg) + '">💬 Send on WhatsApp</a></div>',
       onMount: function (b) {
         $('#copyCred', b).onclick = function () { copyText(msg).then(function () { toast('Copied.', 'success'); }, function () { toast('Could not copy.', 'error'); }); };
       }
     });
   }
 
-  function openCustomerForm(c, done) {
-    var editing = !!c;
+  function openCustomerForm(c, done, prefill) {
+    var editing = !!c; prefill = prefill || {};
     openModal({
       title: editing ? 'Edit customer' : 'Add customer',
       html: '<form id="custForm" novalidate>' +
-        '<div class="field"><label for="cfName">Full name</label><input id="cfName" type="text" maxlength="80" required value="' + esc(c ? c.full_name : '') + '"></div>' +
-        '<div class="field"><label for="cfMobile">Mobile number</label><input id="cfMobile" type="tel" inputmode="numeric" maxlength="14" required value="' + esc(c ? c.mobile : '') + '"' + (editing ? ' disabled' : '') + '>' +
+        '<div class="field"><label for="cfName">Full name</label><input id="cfName" type="text" maxlength="80" required autocomplete="off" value="' + esc(c ? c.full_name : (prefill.name || '')) + '"></div>' +
+        '<div class="field"><label for="cfMobile">Mobile number</label><input id="cfMobile" type="tel" inputmode="numeric" maxlength="14" required autocomplete="off" value="' + esc(c ? c.mobile : (prefill.mobile || '')) + '"' + (editing ? ' disabled' : '') + '>' +
         (editing ? '<span class="hint">Mobile number is their login and cannot be changed.</span>' : '') + '</div>' +
-        '<div class="field"><label for="cfUser">Username (optional)</label><input id="cfUser" type="text" maxlength="30" autocapitalize="none" placeholder="e.g. ramesh.k" value="' + esc(c && c.username ? c.username : '') + '"><span class="hint">3–30 characters: letters, digits, dot or underscore.</span></div>' +
+        '<div class="field"><label for="cfUser">Username (optional)</label><input id="cfUser" type="text" maxlength="30" autocapitalize="none" autocomplete="off" placeholder="e.g. ramesh.k" value="' + esc(c && c.username ? c.username : '') + '"><span class="hint">3–30 characters: letters, digits, dot or underscore.</span></div>' +
         '<div class="field"><label for="cfNotes">Notes (optional)</label><textarea id="cfNotes" maxlength="300">' + esc(c && c.notes ? c.notes : '') + '</textarea></div>' +
         (editing ? '<label class="check"><input type="checkbox" id="cfActive"' + (c.is_active ? ' checked' : '') + '> Active (can sign in and be billed)</label>' :
           '<div class="cred-box"><div class="hint">Initial password (customer must change it at first login)</div><b id="cfPreview" style="font-family:ui-monospace,Menlo,monospace;font-size:18px">—</b></div>') +
@@ -1157,7 +1608,7 @@
           var m = normalizeMobile($('#cfMobile', b).value), n = $('#cfName', b).value;
           p.textContent = m && n.trim().length >= 2 ? initialPassword(n, m) : '—';
         }
-        $('#cfName', b).addEventListener('input', preview); $('#cfMobile', b).addEventListener('input', preview);
+        $('#cfName', b).addEventListener('input', preview); $('#cfMobile', b).addEventListener('input', preview); preview();
         if ($('#cfReset', b)) $('#cfReset', b).onclick = function () {
           confirmDialog('Reset the password for ' + c.full_name + '? They will be given a temporary password and must change it at next login.', 'Reset password').then(function (ok) {
             if (!ok) return;
@@ -1182,7 +1633,7 @@
               }).catch(function (e2) { if (e2.expired) handleError(e2); else err.textContent = e2.message; });
             }
             return invokeFn('create-customer', { full_name: name, mobile: mobile, username: user || null, notes: notes || null }).then(function (res) {
-              close(); showCredentials('Customer created', res, 'Share these login details with the customer.'); if (done) done();
+              close(); showCredentials('Customer created', res, 'Share these login details with the customer.'); if (done) done(res);
             }).catch(function (e2) { if (e2.expired) handleError(e2); else err.textContent = e2.message; });
           });
         };
@@ -1195,18 +1646,20 @@
   /* ------------------------------------------------------------------ */
   function viewCustomerLedger(el, r, alive) {
     return Promise.all([
-      q(sb.from('customer_balances').select('*').eq('customer_id', r.id).maybeSingle()),
+      loadCustomers(),
       fetchAll(function () { return sb.from('transactions').select('*, transaction_items(id,product_name,quantity,unit_price,line_total)').eq('customer_id', r.id).order('created_at', { ascending: true }).order('id'); })
     ]).then(function (res) {
       if (!alive()) return;
-      var c = res[0], txs = res[1];
+      var c = getCustomer(r.id), txs = res[1];
       if (!c) { el.innerHTML = emptyHTML('🔍', 'Customer not found', 'This customer does not exist or you cannot access it.', '<a class="btn" href="#/customers">Back to customers</a>'); return; }
-      el.innerHTML = '<div class="page-head"><div><a href="#/customers">← Customers</a><h2>' + esc(c.full_name) + '</h2><div class="muted">' + esc(c.mobile) + (c.username ? ' · @' + esc(c.username) : '') + (c.is_active ? '' : ' · <span class="badge gray">Inactive</span>') + '</div></div>' +
-        '<div class="actions"><a class="btn primary" href="#/entry/' + c.customer_id + '">➕ New entry</a></div></div>' +
+      el.innerHTML = '<div class="page-head cl-head"><div><a href="#/customers">← Customers</a><h2>' + esc(c.full_name) + '</h2><div class="muted">' + esc(c.mobile) + (c.username ? ' · @' + esc(c.username) : '') + (c.is_active ? '' : ' · <span class="badge gray">Inactive</span>') + '</div></div>' +
+        '<div class="actions">' + (c.is_active ? '<button type="button" class="btn primary" data-bill="' + c.customer_id + '">＋ Bill</button><button type="button" class="btn" data-pay="' + c.customer_id + '">₹ Payment</button>' : '') +
+        (Number(c.balance) > 0 && c.is_active ? '<button type="button" class="btn wa" data-remind="' + c.customer_id + '">💬 Remind</button>' : '') + '<button type="button" class="btn ghost icon" data-edit="' + c.customer_id + '" aria-label="Edit customer">✎</button></div></div>' +
         '<div class="stats three"><div class="stat"><div class="label">Total purchases</div><div class="value">' + money(c.total_purchases) + '</div></div>' +
         '<div class="stat"><div class="label">Total payments</div><div class="value">' + money(c.total_payments) + '</div></div>' +
         '<div class="stat accent"><div class="label">' + balLabel(c.balance) + '</div><div class="value">' + money(Math.abs(c.balance)) + '</div></div></div>' +
         (c.notes ? '<p class="muted">Note: ' + esc(c.notes) + '</p>' : '') + '<div id="ledgerHost"></div>';
+      bindRowActions(el, route);
       renderLedgerPanel($('#ledgerHost', el), txs, {
         owner: true, csvName: 'ledger-' + c.full_name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
         onReverse: function (t) { openReverseModal(t, route); }
@@ -1237,10 +1690,10 @@
       var host = $('#txHost', el), list = filtered();
       if (!list.length) { host.innerHTML = emptyHTML('🧾', 'No transactions found', 'Try a wider date range or different filters.'); return; }
       var shown = list.slice(0, 300);
-      host.innerHTML = '<div class="card" style="padding:0"><div class="table-wrap"><table class="table stack"><thead><tr><th>Date</th><th>Time</th><th>Customer</th><th>Type</th><th>Details</th><th class="num">Amount</th><th></th></tr></thead><tbody>' +
+      host.innerHTML = '<div class="card" style="padding:0"><div class="table-wrap"><table class="table stack stack-tx"><thead><tr><th>When</th><th>Customer</th><th>Type</th><th>Details</th><th class="num">Amount</th><th></th></tr></thead><tbody>' +
         shown.map(function (t) {
           var e = Number(t.balance_effect);
-          return '<tr class="' + (t.is_reversed ? 'reversed' : '') + '"><td data-label="Date">' + fmtDate(t.created_at) + '</td><td data-label="Time">' + fmtTime(t.created_at) + '</td>' +
+          return '<tr class="' + (t.is_reversed ? 'reversed' : '') + '"><td data-label="When">' + fmtDate(t.created_at) + ' \u00B7 ' + fmtTime(t.created_at) + '</td>' +
             '<td data-label="Customer">' + (t.customer ? '<a href="#/customers/' + t.customer_id + '">' + esc(t.customer.full_name) + '</a>' : '—') + '</td>' +
             '<td data-label="Type">' + esc(txLabel(t)) + (t.is_reversed ? ' <span class="badge gray">Reversed</span>' : '') + '</td>' +
             '<td data-label="Details">' + esc(txDetails(t)) + (t.note ? '<br><small class="muted">' + esc(t.note) + '</small>' : '') + '</td>' +
@@ -1291,9 +1744,9 @@
         var rows = state.products.filter(function (p) { return !term || p.name.toLowerCase().indexOf(term) !== -1; });
         var host = $('#prodTable', el);
         if (!rows.length) { host.innerHTML = state.products.length ? emptyHTML('🔍', 'No matching products', '') : emptyHTML('☕', 'No products yet', 'Add tea, coffee, biscuits, cigarettes and snacks with their prices.', '<button class="btn primary" id="addProd2">+ Add product</button>'); var a = $('#addProd2', host); if (a) a.onclick = function () { openProductForm(null, refresh); }; return; }
-        host.innerHTML = '<div class="card" style="padding:0"><div class="table-wrap"><table class="table stack"><thead><tr><th>Product</th><th class="num">Price</th><th>Unit</th><th>Status</th><th>Updated</th><th></th></tr></thead><tbody>' +
+        host.innerHTML = '<div class="card" style="padding:0"><div class="table-wrap"><table class="table stack stack-prod"><thead><tr><th>Product</th><th class="num">Price</th><th>Status</th><th>Updated</th><th></th></tr></thead><tbody>' +
           rows.map(function (p) {
-            return '<tr><td data-label="Product"><b>' + esc(p.name) + '</b></td><td data-label="Price" class="num">' + money(p.price) + '</td><td data-label="Unit">' + esc(p.unit) + '</td>' +
+            return '<tr><td data-label="Product"><b>' + esc(p.name) + '</b></td><td data-label="Price" class="num">' + money(p.price) + ' <small class="muted">/ ' + esc(p.unit) + '</small></td>' +
               '<td data-label="Status">' + (p.is_active ? '<span class="badge green">Active</span>' : '<span class="badge gray">Hidden</span>') + '</td><td data-label="Updated">' + fmtDate(p.updated_at) + '</td>' +
               '<td class="actions-cell"><div class="actions"><button class="btn sm" data-pedit="' + p.id + '">Edit / price</button><button class="btn sm ghost" data-ptoggle="' + p.id + '">' + (p.is_active ? 'Hide' : 'Show') + '</button></div></td></tr>';
           }).join('') + '</tbody></table></div></div>';
@@ -1358,7 +1811,7 @@
         '<div class="stat"><div class="label">Collected</div><div class="value">' + money(tot.col) + '</div></div>' +
         '<div class="stat"><div class="label">Cash / UPI / Other</div><div class="value" style="font-size:16px">' + money(tot.cash) + ' / ' + money(tot.upi) + ' / ' + money(tot.oth) + '</div></div>' +
         '<div class="stat"><div class="label">Avg daily sales</div><div class="value">' + money(tot.sales / data.length) + '</div></div></div>' +
-        '<div class="card" style="padding:0"><div class="table-wrap"><table class="table stack"><thead><tr><th>Date</th><th class="num">Bills</th><th class="num">Sales</th><th class="num">Collected</th><th class="num">Cash</th><th class="num">UPI</th><th class="num">Other</th></tr></thead><tbody>' +
+        '<div class="card" style="padding:0"><div class="table-wrap"><table class="table stack stack-rep"><thead><tr><th>Date</th><th class="num">Bills</th><th class="num">Sales</th><th class="num">Collected</th><th class="num">Cash</th><th class="num">UPI</th><th class="num">Other</th></tr></thead><tbody>' +
         data.map(function (d) {
           return '<tr><td data-label="Date">' + fmtISODate(d.day) + '</td><td data-label="Bills" class="num">' + d.bills + '</td><td data-label="Sales" class="num"><b>' + money(d.sales) + '</b></td><td data-label="Collected" class="num">' + money(d.collections) + '</td><td data-label="Cash" class="num">' + money(d.cash_amt) + '</td><td data-label="UPI" class="num">' + money(d.upi_amt) + '</td><td data-label="Other" class="num">' + money(d.other_amt) + '</td></tr>';
         }).join('') + '</tbody></table></div></div><p class="hint">Reversals are counted on the day they are made, so corrections net out the original entry.</p>';
@@ -1392,18 +1845,30 @@
   /* OWNER: Settings                                                     */
   /* ------------------------------------------------------------------ */
   function viewSettings(el) {
-    el.innerHTML = '<div class="two-col"><section class="card"><h2 class="card-title">Stall</h2><form id="stallForm" novalidate>' +
+    el.innerHTML = '<div class="two-col"><section class="card"><h2 class="card-title">Stall &amp; payments</h2><form id="stallForm" novalidate>' +
       '<div class="field"><label for="stName">Stall name</label><input id="stName" type="text" maxlength="80" value="' + esc(state.stall.name) + '"></div>' +
-      '<div class="error-text" id="stErr"></div><button class="btn primary" type="submit">Save</button></form>' +
-      '<div class="divider"></div><dl class="kv"><dt>Signed in as</dt><dd>' + esc(state.profile.full_name) + '</dd><dt>Email</dt><dd>' + esc(state.profile.login_email) + '</dd></dl></section>' +
+      '<div class="field"><label for="stUpi">UPI ID for payment QR</label><input id="stUpi" type="text" autocapitalize="none" autocomplete="off" spellcheck="false" placeholder="e.g. sharmachai@okhdfc" value="' + esc(state.stall.upi_id || '') + '">' +
+      '<span class="hint">Added to WhatsApp reminders as a QR and shown to customers who owe money. Leave empty to switch it off.</span></div>' +
+      '<div class="error-text" id="stErr" role="alert"></div><div class="form-actions" style="justify-content:flex-start"><button class="btn primary" type="submit">Save</button><button type="button" class="btn" id="stQr">Preview QR</button></div></form>' +
+      '<div class="divider"></div><dl class="kv"><dt>Signed in as</dt><dd>' + esc(state.profile.full_name) + '</dd><dt>Email</dt><dd>' + esc(state.profile.login_email) + '</dd></dl>' +
+      '<div class="divider"></div><button type="button" class="btn danger block" id="setOut">Sign out</button></section>' +
       '<section class="card"><h2 class="card-title">Change password</h2>' + passwordFormHTML({ recovery: false }) + '</section></div>';
+    $('#stQr', el).onclick = openQrPreview;
+    $('#setOut', el).onclick = signOut;
     $('#stallForm', el).onsubmit = function (e) {
       e.preventDefault();
-      var name = $('#stName', el).value.trim(), err = $('#stErr', el); err.textContent = '';
+      var name = $('#stName', el).value.trim(), upi = $('#stUpi', el).value.trim().toLowerCase(), err = $('#stErr', el); err.textContent = '';
       if (name.length < 2) { err.textContent = 'Enter a stall name (at least 2 characters).'; return; }
+      if (upi && !validUpi(upi)) { err.textContent = 'That does not look like a UPI ID. It should look like name@bank, e.g. sharmachai@okhdfc.'; return; }
       withBusy($('button[type=submit]', e.target), function () {
-        return q(sb.from('stalls').update({ name: name }).eq('id', state.stall.id)).then(function () { state.stall.name = name; $('.stall-name').textContent = name; toast('Stall name saved.', 'success'); })
-          .catch(function (e2) { if (e2.expired) handleError(e2); else err.textContent = e2.message; });
+        return q(sb.from('stalls').update({ name: name, upi_id: upi || null }).eq('id', state.stall.id)).then(function () {
+          state.stall.name = name; state.stall.upi_id = upi || null;
+          var sn = $('.stall-name'); if (sn) sn.textContent = name;
+          toast(upi ? 'Saved. Reminders will now include your payment QR.' : 'Saved.', 'success');
+        }).catch(function (e2) {
+          if (e2.expired) handleError(e2);
+          else err.textContent = /upi_id/i.test(e2.message) ? 'The database needs the latest supabase-setup.sql (it adds the UPI ID column). Run it in the Supabase SQL Editor, then try again.' : e2.message;
+        });
       });
     };
     bindPasswordForm($('section:last-child', el), { recovery: false, onDone: function () { toast('Password updated.', 'success'); $('#pwForm', el).reset(); } });
@@ -1421,13 +1886,27 @@
       if (!alive()) return;
       var bal = res[0] || { total_purchases: 0, total_payments: 0, balance: 0 };
       var recent = buildLedger(res[1]).slice(-5).reverse();
-      el.innerHTML = notifBannerHTML() + '<div class="hero"><div class="label">Hello, ' + esc(state.profile.full_name.split(' ')[0]) + ' 👋 — ' + (Number(bal.balance) > 0 ? 'Outstanding balance' : Number(bal.balance) < 0 ? 'Advance with stall' : 'You are all settled') + '</div>' +
-        '<div class="big">' + money(Math.abs(bal.balance)) + '</div><div class="sub">at ' + esc(state.stall.name) + '</div></div>' +
+      var upi = state.stall.upi_id, owed = Number(bal.balance);
+      var payCard = owed > 0 && upi
+        ? '<section class="card pay-card"><div class="pay-row"><div><b>Pay your dues</b><div class="muted">' + money(owed) + ' to ' + esc(state.stall.name) + '</div></div>' +
+          '<a class="btn primary" href="' + esc(upiLink(upi, state.stall.name, owed, 'Khata dues')) + '">Pay with UPI app</a></div>' +
+          '<div class="pay-links"><button type="button" class="link-btn" id="showQr">Show QR code</button><span class="muted">UPI ID: <b>' + esc(upi) + '</b> <button type="button" class="link-btn" id="copyUpi">Copy</button></span></div>' +
+          '<div id="payQrBox" class="qr-box hidden"><canvas id="payQr" role="img" aria-label="UPI payment QR code"></canvas></div></section>' : '';
+      el.innerHTML = notifBannerHTML() + '<div class="hero"><div class="label">Hello, ' + esc(firstName(state.profile.full_name)) + ' 👋 — ' + (owed > 0 ? 'Outstanding balance' : owed < 0 ? 'Advance with stall' : 'You are all settled') + '</div>' +
+        '<div class="big">' + money(Math.abs(bal.balance)) + '</div><div class="sub">at ' + esc(state.stall.name) + '</div></div>' + payCard +
         '<div class="stats"><div class="stat"><div class="label">Total purchases</div><div class="value">' + money(bal.total_purchases) + '</div></div><div class="stat"><div class="label">Total payments</div><div class="value">' + money(bal.total_payments) + '</div></div></div>' +
         '<h2 class="card-title" style="margin-top:6px">Recent activity <a class="btn sm ghost" href="#/ledger">Full ledger</a></h2>' +
         (recent.length ? '<div class="ledger">' + recent.map(function (t) { return ledgerCardHTML(t, false); }).join('') + '</div>' : emptyHTML('☕', 'Nothing here yet', 'Your purchases and payments will appear here.'));
       var banner = $('#notifBanner', el);
       if (banner) banner.onclick = openNotifications;
+      var sq = $('#showQr', el);
+      if (sq) sq.onclick = function () {
+        var box = $('#payQrBox', el), open = box.classList.toggle('hidden');
+        sq.textContent = open ? 'Show QR code' : 'Hide QR code';
+        if (!open && !box.dataset.drawn) { box.dataset.drawn = '1'; if (!drawPayCard($('#payQr', el), upiLink(upi, state.stall.name, owed, 'Khata dues'), { stall: state.stall.name, amount: owed, upi: upi })) box.innerHTML = '<div class="qr-missing">The QR could not be drawn. Use the UPI ID above.</div>'; }
+      };
+      var cu = $('#copyUpi', el);
+      if (cu) cu.onclick = function () { copyText(upi).then(function () { toast('UPI ID copied.', 'success'); }, function () { toast('Could not copy.', 'error'); }); };
     });
   }
 
@@ -1464,6 +1943,7 @@
       else if (event === 'SIGNED_OUT' && state.profile) setTimeout(function () { forceLogout(SESSION_MSG); }, 0);
     });
     window.addEventListener('hashchange', route);
+    bindGlobalClicks();
 
     sb.auth.getSession().then(function () {
       if (state.recovery) { hideBoot(); return; }

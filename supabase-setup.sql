@@ -25,6 +25,10 @@ create table if not exists public.stalls (
   updated_at  timestamptz not null default now()
 );
 
+-- UPI ID shown to customers and encoded in the payment QR (e.g. sharmachai@okhdfc). Optional.
+alter table public.stalls add column if not exists upi_id text
+  check (upi_id is null or upi_id ~ '^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z][a-zA-Z0-9]{1,63}$');
+
 create table if not exists public.profiles (
   id                   uuid primary key references auth.users(id) on delete restrict,
   stall_id             uuid not null references public.stalls(id) on delete restrict,
@@ -682,7 +686,7 @@ grant select on public.stalls, public.profiles, public.products,
                 public.transactions, public.transaction_items,
                 public.audit_log, public.customer_balances to authenticated;
 
-grant update (name)                                   on public.stalls   to authenticated;
+grant update (name, upi_id)                           on public.stalls   to authenticated;
 grant update (full_name, username, notes, is_active)  on public.profiles to authenticated;
 grant insert (name, price, unit, is_active)           on public.products to authenticated;
 grant update (name, price, unit, is_active)           on public.products to authenticated;

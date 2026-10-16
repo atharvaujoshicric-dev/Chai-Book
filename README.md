@@ -87,18 +87,19 @@ SUPABASE_PUBLISHABLE_KEY: 'YOUR-PUBLISHABLE-OR-ANON-KEY'
 Use the **publishable** key (or the legacy **anon** key). These two values are meant to be public. **Never** put the `service_role` / secret key in any file in this repo.
 
 ### 7. Publish on GitHub Pages
-1. Create a repository (e.g. `chai-khata`). On GitHub: **Add file → Upload files**, drag in `index.html`, `style.css`, `app.js`, `supabase.js`, `README.md`, `supabase-setup.sql` and the `functions` folder (Chrome/Edge can drag whole folders). Commit.
+1. Create a repository (e.g. `chai-khata`). On GitHub: **Add file → Upload files**, drag in `index.html`, `style.css`, `app.js`, `supabase.js`, `qrcode.js`, `README.md`, `supabase-setup.sql` and the `functions` folder (Chrome/Edge can drag whole folders). Commit.
 2. **Settings → Pages → Build and deployment**: Source *Deploy from a branch*, Branch `main`, folder `/ (root)`. Save.
 3. After a minute your app is live at `https://USERNAME.github.io/chai-khata/`.
 4. Put that URL into Supabase **Authentication → URL Configuration** (step 4).
 
-All asset paths are relative (`style.css`, `app.js`, `supabase.js`), so it works on a project URL like `/chai-khata/`. Navigation uses `#/…` hashes, so no server rewrites are needed.
+All asset paths are relative (`style.css`, `app.js`, `supabase.js`, `qrcode.js`), so it works on a project URL like `/chai-khata/`. Navigation uses `#/…` hashes, so no server rewrites are needed.
 
 ### 8. First run
 1. Open the site and sign in with the owner email and password.
 2. **Products** → add or review prices.
+2b. **More → Settings** → enter your **UPI ID** (e.g. `yourstall@okhdfc`) so reminders and the customer "Pay your dues" card can show a payment QR.
 3. **Customers → + Add customer** → enter name + mobile. You'll see the initial password once, with **Copy** and **Send on WhatsApp** buttons.
-4. **New Entry** → pick the customer → tap products → **Record purchase**. Use the **Payment** tab for Cash/UPI/Other.
+4. **New Entry** (the orange ＋ button) → type a name/mobile or tap a recent customer → tap products → **Record purchase** → **Next customer**. Use the **Payment** tab for Cash/UPI/Other.
 5. Sign in as that customer (mobile + initial password in another browser/private window) to verify they're forced to change the password and only see their own ledger.
 
 ---
@@ -108,7 +109,8 @@ All asset paths are relative (`style.css`, `app.js`, `supabase.js`), so it works
 | Area | What you get |
 |---|---|
 | Owner dashboard | Today's sales/collections, outstanding total, top dues, recent activity |
-| New entry | Fast customer search, product tiles, cart, note; payments (Cash/UPI/Other); manual debit/credit adjustments |
+| New entry | Always-visible customer search, recent-customer chips, no "change customer" step, popular products first, sticky record bar, quick payment amounts, "Next customer" after saving; entry buttons on every customer row |
+| Dues & reminders | Dues list, 💬 **Remind** per customer or a one-by-one reminder round: WhatsApp message with amount due + UPI QR (**Share QR image**, or download) |
 | Customers | Add/edit/search, active/inactive, per-customer ledger with date filter, reset password, CSV export |
 | Products | Add, edit price (past bills unaffected), hide/show |
 | Transactions | All entries by date/type/customer, **Reverse** with a mandatory reason, itemised CSV |
@@ -147,3 +149,13 @@ All asset paths are relative (`style.css`, `app.js`, `supabase.js`), so it works
 | Customers don't get the bell / live alerts | Re-run `supabase-setup.sql` (adds the unread tracking + Realtime) and make sure Realtime isn't disabled for the project. The bell still works without Realtime; alerts then arrive within a minute |
 | Reset-password email link lands on the login page | Add your GitHub Pages URL to **Redirect URLs** (step 4) |
 | Blank page on GitHub Pages | Pages enabled? Files uploaded to the repository root (not inside a sub-folder)? |
+
+
+---
+
+## Updating an existing install (v2)
+1. Re-run `supabase-setup.sql` in the SQL Editor (safe to repeat; adds the `upi_id` column).
+2. Upload the new `index.html`, `style.css`, `app.js` **and the new `qrcode.js`**.
+3. Add your UPI ID in Settings.
+
+**WhatsApp note:** a WhatsApp link can only carry text, not an image. The reminder opens the chat with the message (amount + UPI ID + pay link); to attach the QR, tap **Share QR image + message** (phones) or download the QR and attach it. Customers can also open **Pay your dues** in their own app.
