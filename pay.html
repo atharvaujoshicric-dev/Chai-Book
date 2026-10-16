@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Pay your tea stall dues</title>
+<style>
+  :root { --cream:#fbf3e4; --brown:#3b2314; --orange:#e07a1f; --orange-d:#c25e0c; --line:#ead9bd; --muted:#7a6a5d; }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; min-height:100dvh; background:var(--cream); color:var(--brown); font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; display:flex; align-items:center; justify-content:center; padding:20px; }
+  .card { width:100%; max-width:380px; background:#fff; border:1px solid var(--line); border-radius:20px; padding:24px 20px; text-align:center; box-shadow:0 10px 30px rgba(59,35,20,.12); }
+  h1 { margin:0; font-size:22px; font-family:Georgia,serif; }
+  .sub { color:var(--muted); font-size:14px; margin:4px 0 14px; }
+  .amt { font-family:Georgia,serif; font-size:40px; font-weight:700; color:var(--orange-d); margin:4px 0 14px; }
+  canvas { width:100%; max-width:280px; height:auto; border:1px solid var(--line); border-radius:12px; }
+  .btn { display:block; width:100%; min-height:52px; margin-top:16px; border-radius:14px; border:0; background:var(--orange); color:#fff; font:inherit; font-size:17px; line-height:52px; font-weight:700; text-decoration:none; cursor:pointer; }
+  .btn.ghost { background:#fff; color:var(--brown); border:1.5px solid var(--line); margin-top:10px; min-height:46px; font-size:15px; line-height:44px; }
+  .upi { margin-top:14px; font-size:14px; color:var(--muted); overflow-wrap:anywhere; }
+  .upi b { color:var(--brown); }
+  .hint { font-size:12.5px; color:var(--muted); margin-top:12px; }
+  .err { color:#b3392b; font-weight:600; }
+</style>
+</head>
+<body>
+<main class="card" id="card"><p>Loading…</p></main>
+<script src="qrcode.js"></script>
+<script>
+(function () {
+  var q = new URLSearchParams(location.search), card = document.getElementById('card');
+  var pa = (q.get('pa') || '').trim(), pn = (q.get('pn') || '').trim().slice(0, 60), am = (q.get('am') || '').trim(), tn = (q.get('tn') || 'Khata dues').slice(0, 40);
+  function el(t, c, x) { var e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; }
+  if (!/^[a-zA-Z0-9._-]{2,100}@[a-zA-Z][a-zA-Z0-9]{1,63}$/.test(pa)) { card.textContent = ''; card.appendChild(el('p', 'err', 'This payment link is not valid. Please ask the stall to send it again.')); return; }
+  var amount = /^\d{1,7}(\.\d{1,2})?$/.test(am) && Number(am) > 0 ? Number(am).toFixed(2) : '';
+  var link = 'upi://pay?pa=' + encodeURIComponent(pa).replace(/%40/g, '@') + '&pn=' + encodeURIComponent(pn || 'Tea stall') + '&cu=INR' + (amount ? '&am=' + amount : '') + '&tn=' + encodeURIComponent(tn);
+  card.textContent = '';
+  card.appendChild(el('h1', '', pn || 'Tea stall'));
+  card.appendChild(el('div', 'sub', amount ? 'Amount due' : 'Pay by UPI'));
+  if (amount) card.appendChild(el('div', 'amt', '₹' + Number(amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })));
+  var cv = el('canvas'); card.appendChild(cv);
+  try {
+    var qr = qrcode(0, 'M'); qr.addData(link); qr.make();
+    var n = qr.getModuleCount(), px = 10, pad = 4, size = (n + pad * 2) * px;
+    cv.width = cv.height = size; var g = cv.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, size, size); g.fillStyle = '#000';
+    for (var r = 0; r < n; r++) for (var c = 0; c < n; c++) if (qr.isDark(r, c)) g.fillRect((c + pad) * px, (r + pad) * px, px, px);
+  } catch (e) { cv.remove(); }
+  var pay = el('a', 'btn', amount ? 'Pay ₹' + Number(amount).toLocaleString('en-IN', { minimumFractionDigits: 2 }) + ' with UPI app' : 'Pay with UPI app'); pay.href = link; card.appendChild(pay);
+  var up = el('div', 'upi'); up.appendChild(document.createTextNode('UPI ID: ')); up.appendChild(el('b', '', pa)); card.appendChild(up);
+  var cp = el('button', 'btn ghost', 'Copy UPI ID'); cp.type = 'button';
+  cp.onclick = function () { (navigator.clipboard ? navigator.clipboard.writeText(pa) : Promise.reject()).then(function () { cp.textContent = 'Copied ✓'; }, function () { cp.textContent = 'Long-press the UPI ID to copy'; }); };
+  card.appendChild(cp);
+  card.appendChild(el('p', 'hint', 'On this phone tap the button. On another device, scan the QR with GPay, PhonePe, Paytm or any UPI app.'));
+})();
+</script>
+</body>
+</html>
