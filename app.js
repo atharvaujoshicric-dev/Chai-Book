@@ -829,7 +829,19 @@
     var qr;
     try { qr = window.qrcode(0, 'M'); qr.addData(payload); qr.make(); } catch (e) { console.error(e); return false; }
     var n = qr.getModuleCount(), W = 640, cell = Math.floor(440 / n), size = cell * n, quiet = 26;
-    var top = o.amount > 0 ? 212 : 152, H = top + size + quiet * 2 + 150;
+    var font0 = '"Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif', capLines = [];
+    if (o.caption && o.caption.length) {      // message text printed under the QR, wrapped to the card width
+      var sg = document.createElement('canvas').getContext('2d'); sg.font = '500 27px ' + font0;
+      o.caption.forEach(function (para) {
+        var words = String(para).split(/\s+/), line = '';
+        words.forEach(function (w) { var t = line ? line + ' ' + w : w; if (sg.measureText(t).width > W - 90 && line) { capLines.push(line); line = w; } else line = t; });
+        if (line) capLines.push(line);
+        capLines.push('');
+      });
+      capLines.pop();
+    }
+    var capH = capLines.length ? 34 + capLines.length * 38 : 0;
+    var top = o.amount > 0 ? 212 : 152, H = top + size + quiet * 2 + 150 + capH;
     canvas.width = W; canvas.height = H;
     var g = canvas.getContext('2d'), font = '"Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
     g.fillStyle = '#fffdf8'; g.fillRect(0, 0, W, H);
@@ -851,6 +863,12 @@
     var yb = y0 + size + quiet;
     fit('UPI ID: ' + o.upi, yb + 62, 28, 600, '#262220');
     fit('GPay · PhonePe · Paytm · BHIM', yb + 104, 22, 500, '#7a6a5d');
+    if (capLines.length) {
+      var cy = yb + 104 + 30;
+      g.strokeStyle = '#e8d9bf'; g.lineWidth = 2; g.beginPath(); g.moveTo(50, cy); g.lineTo(W - 50, cy); g.stroke();
+      g.fillStyle = '#3b2314'; g.font = '500 27px ' + font; g.textAlign = 'center';
+      capLines.forEach(function (l, k) { if (l) g.fillText(l, W / 2, cy + 44 + k * 38); });
+    }
     return true;
   }
   function canShareFiles() {
@@ -858,13 +876,14 @@
       return !!(navigator.canShare && window.File && navigator.canShare({ files: [new File(['x'], 'x.png', { type: 'image/png' })] }));
     } catch (e) { return false; }
   }
-  function reminderMessage(c, amount, lead) {
+  function reminderMessage(c, amount, lead, plain) {
     var stall = state.stall.name, upi = state.stall.upi_id, L = [];
     L.push('Hello ' + firstName(c.full_name) + ' 🙏');
     if (lead) L.push(lead);
     if (amount > 0) {
       L.push('Your outstanding balance at *' + stall + '* is *' + money(amount) + '* (as on ' + fmtDate(Date.now()) + ').');
-      if (upi) { L.push('👉 Tap to pay ' + money(amount) + ' (QR + UPI button):\n' + payPageUrl(upi, stall, amount)); L.push('Or pay to UPI ID *' + upi + '*. Thank you!'); }
+      if (upi && plain) { L.push('Scan the QR to pay, or pay to UPI ID ' + upi + '. Thank you!'); }
+      else if (upi) { L.push('👉 Tap to pay ' + money(amount) + ' (QR + UPI button):\n' + payPageUrl(upi, stall, amount)); L.push('Or pay to UPI ID *' + upi + '*. Thank you!'); }
       else L.push('Please clear it at your convenience. Thank you!');
     } else {
       L.push('Your khata at *' + stall + '* is fully settled. Thank you! ☕');
@@ -890,11 +909,10 @@
             '<div class="field"><label for="remAmt">Amount to request (₹)</label><input id="remAmt" class="input" type="text" inputmode="decimal" autocomplete="off" value="' + (due ? due.toFixed(2) : '') + '" placeholder="0.00"></div>' +
             '<div id="remQrBox" class="qr-box"></div>' +
             '<div class="field"><label for="remMsg">Message (edit if you like)</label><textarea id="remMsg" rows="7"></textarea></div>' +
-            '<div class="rem-actions"><a class="btn wa block" id="remWa" target="_blank" rel="noopener" href="#">💬 Open WhatsApp chat with ' + esc(firstName(c.full_name)) + '</a>' +
+            '<div class="rem-actions"><button type="button" class="btn wa block hidden" id="remShare2">📤 Send QR + message on WhatsApp</button><a class="btn wa block" id="remWa" target="_blank" rel="noopener" href="#">💬 Open WhatsApp chat with ' + esc(firstName(c.full_name)) + '</a>' +
             '<a class="btn block" id="remShare" target="_blank" rel="noopener" href="#"></a>' +
-            '<button type="button" class="btn ghost block hidden" id="remShare2">📤 Share picture + message (pick the chat yourself)</button>' +
             '<button type="button" class="btn ghost block" id="remCopy">Copy message</button></div>' +
-            '<p class="hint" id="remHint">The message includes a tappable pay link — the customer taps it to see the QR with the amount already filled in and a Pay button. WhatsApp can’t attach a picture automatically; if you also want the image, use the buttons above.</p>' +
+            '<p class="hint" id="remHint">Tap “Send QR + message”, choose WhatsApp, then pick the customer: the QR picture goes with the message printed under it. (Browsers can’t pick the chat for you. The chat button below sends text with a tappable pay link instead.)</p>' +
             (list.length > 1 ? '<div class="form-actions"><button type="button" class="btn ghost" id="remNext">Skip →</button></div>' : '');
           var amtEl = $('#remAmt', body), msgEl = $('#remMsg', body), qrBox = $('#remQrBox', body), shareBtn = $('#remShare', body), share2 = $('#remShare2', body);
           function curAmount() { var v = amtEl.value.trim(); return v === '' ? 0 : parseAmount(v); }
@@ -909,12 +927,12 @@
             if (amt > 0 && upi) {
               qrBox.innerHTML = '<canvas id="remQr" role="img" aria-label="UPI payment QR code"></canvas>';
               var cv = $('#remQr', qrBox);
-              var ok = drawPayCard(cv, upiLink(upi, state.stall.name, amt, 'Khata dues'), { stall: state.stall.name, amount: amt, upi: upi });
+              var ok = drawPayCard(cv, upiLink(upi, state.stall.name, amt, 'Khata dues'), { stall: state.stall.name, amount: amt, upi: upi, caption: reminderMessage(c, amt, opts.lead, true).replace(/\*/g, '').split('\n\n') });
               if (!ok) { qrBox.innerHTML = '<div class="qr-missing">The QR code could not be generated. The UPI ID is still included in the message.</div>'; return; }
               cv.toBlob(function (blob) { if (blob) file = new File([blob], 'pay-' + String(c.full_name).toLowerCase().replace(/[^a-z0-9]+/g, '-') + '.png', { type: 'image/png' }); });
               shareBtn.textContent = '💬 Open chat + get QR image';
               shareBtn.classList.remove('hidden');
-              if (canShare) share2.classList.remove('hidden');
+              if (canShare) { share2.classList.remove('hidden'); $('#remWa', body).classList.remove('wa'); shareBtn.classList.add('hidden'); }
             } else if (!upi) {
               qrBox.innerHTML = '<div class="qr-missing">Add your UPI ID in <a href="#/settings" data-close>Settings</a> to include a payment QR.</div>';
             } else {
@@ -949,11 +967,15 @@
               } else saved();
             } catch (err) { saved(); }
           };
+          // Phones: the system share sheet sends the picture (QR + message printed under it) and the text as caption to the chat you pick.
           share2.onclick = function () {
             if (!file) return toast('The QR is still getting ready — try again in a second.', 'error');
-            navigator.share({ files: [file], text: msgEl.value.trim() }).then(markSent).catch(function (e) {
+            var amt = curAmount(), txt = dirty ? msgEl.value.trim() : reminderMessage(c, amt, opts.lead, true);
+            var data = { files: [file], text: txt };
+            if (navigator.canShare && !navigator.canShare(data)) { downloadBlob(file, file.name); return toast('Your phone cannot share pictures from the browser, so the QR was saved. Open the chat and attach it.', 'error'); }
+            navigator.share(data).then(markSent).catch(function (e) {
               if (e && e.name === 'AbortError') return;
-              downloadBlob(file, file.name); toast('Sharing failed, so the QR image was downloaded instead.', 'error');
+              downloadBlob(file, file.name); toast('Sharing failed, so the QR image was saved. Open the chat and attach it.', 'error');
             });
           };
           $('#remCopy', body).onclick = function () { copyText(msgEl.value).then(function () { toast('Message copied.', 'success'); }, function () { toast('Could not copy.', 'error'); }); };
