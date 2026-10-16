@@ -817,6 +817,12 @@
     if (note) u += '&tn=' + encodeURIComponent(note);
     return u;
   }
+  // Link to the stall's own pay page (pay.html next to index.html): WhatsApp makes it tappable, and it shows the QR + a Pay button.
+  function payPageUrl(upi, payee, amount) {
+    var u = new URL('pay.html', location.href.split('#')[0].split('?')[0]);
+    u.searchParams.set('pa', upi); u.searchParams.set('pn', payee); if (amount > 0) u.searchParams.set('am', Number(amount).toFixed(2));
+    return u.toString();
+  }
   // Draws a shareable "scan to pay" card (stall name, amount, QR, UPI ID) onto a canvas.
   function drawPayCard(canvas, payload, o) {
     if (!window.qrcode) return false;
@@ -858,7 +864,8 @@
     if (lead) L.push(lead);
     if (amount > 0) {
       L.push('Your outstanding balance at *' + stall + '* is *' + money(amount) + '* (as on ' + fmtDate(Date.now()) + ').');
-      L.push(upi ? 'You can pay by UPI to *' + upi + '* using any UPI app (GPay, PhonePe, Paytm…). Thank you!' : 'Please clear it at your convenience. Thank you!');
+      if (upi) { L.push('👉 Tap to pay ' + money(amount) + ' (QR + UPI button):\n' + payPageUrl(upi, stall, amount)); L.push('Or pay to UPI ID *' + upi + '*. Thank you!'); }
+      else L.push('Please clear it at your convenience. Thank you!');
     } else {
       L.push('Your khata at *' + stall + '* is fully settled. Thank you! ☕');
     }
@@ -887,7 +894,7 @@
             '<a class="btn block" id="remShare" target="_blank" rel="noopener" href="#"></a>' +
             '<button type="button" class="btn ghost block hidden" id="remShare2">📤 Share picture + message (pick the chat yourself)</button>' +
             '<button type="button" class="btn ghost block" id="remCopy">Copy message</button></div>' +
-            '<p class="hint" id="remHint">WhatsApp links can only carry text. “Open chat + get QR image” opens the customer’s chat with the message and saves the QR so you can attach it (📎), or pastes it with Ctrl+V on WhatsApp Web.</p>' +
+            '<p class="hint" id="remHint">The message includes a tappable pay link — the customer taps it to see the QR with the amount already filled in and a Pay button. WhatsApp can’t attach a picture automatically; if you also want the image, use the buttons above.</p>' +
             (list.length > 1 ? '<div class="form-actions"><button type="button" class="btn ghost" id="remNext">Skip →</button></div>' : '');
           var amtEl = $('#remAmt', body), msgEl = $('#remMsg', body), qrBox = $('#remQrBox', body), shareBtn = $('#remShare', body), share2 = $('#remShare2', body);
           function curAmount() { var v = amtEl.value.trim(); return v === '' ? 0 : parseAmount(v); }
